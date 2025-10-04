@@ -1,0 +1,44 @@
+{
+  "name": "auth-flow",
+  "version": "2.0.0",
+  "description": "Complete authentication system with JWT (any language)",
+  "source_credits": {
+    "original": "production-app",
+    "opt_out_training": false
+  },
+  "requirements": {
+    "languages": ["javascript", "python", "java", "any"],
+    "frameworks": ["react", "flask", "spring", "agnostic"],
+    "minVersion": {
+      "python": "3.8",
+      "java": "11"
+    }
+  },
+  "provides": {
+    "feature": "auth-flow",
+    "capabilities": ["jwt", "refresh-tokens", "role-management"]
+  },
+  "examples": {
+    "entries": [
+      {
+        "path": "source/javascript/nextjs/implementation.js",
+        "language": "javascript"
+      },
+      {
+        "path": "source/python/flask/api.py",
+        "language": "python"
+      },
+      {
+        "path": "source/java/spring/controller.java",
+        "language": "java"
+      }
+    ]
+  },
+  "ai_adaptation": {
+    "strategy": "agentic-hybrid",
+    "agent_model": "z-ai/glm-4.6",
+    "preserve": ["security-measures"],
+    "adaptable": ["lang-syntax", "file-structure"],
+    "min_confidence": 0.8
+  }
+}

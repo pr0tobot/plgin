@@ -1,0 +1,42 @@
+{
+  "name": "visual-editor",
+  "version": "0.1.0",
+  "description": "A visual editor interface for creating and editing page layouts using drag-and-drop components",
+  "source_credits": {
+    "original": "/Volumes/MacMiniStorage/VisualEditor/visual-editor/src/app/studio/editor",
+    "opt_out_training": false
+  },
+  "requirements": {
+    "languages": [
+      "typescript"
+    ],
+    "frameworks": [
+      "React",
+      "Next.js"
+    ],
+    "minVersion": {}
+  },
+  "provides": {
+    "feature": "Visual page editing and layout management"
+  },
+  "examples": {
+    "entries": [
+      {
+        "path": "/Volumes/MacMiniStorage/VisualEditor/visual-editor/src/app/studio/editor/page.tsx",
+        "language": "typescript"
+      }
+    ]
+  },
+  "ai_adaptation": {
+    "strategy": "agentic-hybrid",
+    "agent_model": "z-ai/glm-4.6",
+    "preserve": [
+      "security-measures"
+    ],
+    "adaptable": [
+      "lang-syntax",
+      "file-structure"
+    ],
+    "min_confidence": 0.8
+  }
+}

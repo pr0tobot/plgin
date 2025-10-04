@@ -1,0 +1,9 @@
+[2025-10-04T21:45:16.762Z] Pack creation started
+[2025-10-04T21:45:16.763Z] Starting extraction for "visual-editor" from /Volumes/MacMiniStorage/VisualEditor/visual-editor/src/app/studio/editor
+[2025-10-04T21:45:16.767Z] Found 1 files in the feature directory
+[2025-10-04T21:45:16.767Z] Reading source files and detecting languages
+[2025-10-04T21:45:16.768Z] Detected languages: typescript
+[2025-10-04T21:45:16.769Z] Analyzing feature with AI
+[2025-10-04T21:45:20.746Z] AI analysis complete
+[2025-10-04T21:45:20.748Z] Skipping modular examples generation (disabled by default)
+[2025-10-04T21:45:20.748Z] Feature extraction complete

@@ -1,0 +1,4 @@
+{
+  "error_handling": "try-catch",
+  "async": "sync"
+}
