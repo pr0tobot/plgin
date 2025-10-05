@@ -20,10 +20,10 @@ Create a feature pack from a prompt:
 plgn create "Build a user authentication system"
 ```
 
-Discover and add packs (no additional credentials needed):
+Discover and apply packs (no additional credentials needed):
 ```bash
 plgn discover --query "authentication"
-plgn add auth-pack
+plgn apply auth-pack
 ```
 
 Publish your pack (no GitHub token needed):
@@ -37,7 +37,7 @@ plgn publish ./my-pack
 - **`plgn config`** - Configure AI provider, model, and settings
 - **`plgn discover`** - Find compatible packs for your project
 - **`plgn check <pack>`** - Analyze pack compatibility
-- **`plgn add <pack>`** - Integrate a pack into your project
+- **`plgn apply <pack>`** - Integrate a pack into your project
 - **`plgn publish <path>`** - Publish a pack to the registry
 
 ## Configuration
@@ -77,6 +77,7 @@ Options:
   --verbose           Show detailed logs
   --timeout <ms>      Operation timeout
   --agentic          Enable AI-powered mode
+  --fast             Favor speed with semantic hints and fewer agent iterations
 ```
 
 ## Examples

@@ -167,6 +167,9 @@ export async function createPackFromSource(params: CreatePackParams): Promise<Cr
     throw new Error(`Source path not found: ${sourcePath}`);
   }
 
+  const semanticHints = params.semanticHints ?? [];
+  const fastMode = Boolean(params.request.fast);
+
   // Early materialization: create workspace and initial manifest/logs so partial results persist on abort.
   const normalizedName = sanitizeName(params.name ?? params.request.featureName);
   const baseDir = resolve(process.cwd(), params.outputDir, normalizedName);
@@ -206,7 +209,7 @@ export async function createPackFromSource(params: CreatePackParams): Promise<Cr
   await writeText(join(baseDir, 'logs', 'create.log'), `[${new Date().toISOString()}] Pack creation started\n`);
 
   if (params.request.agentic) {
-    const agenticPrompt = [
+    let agenticPrompt = [
       `Extract the feature "${params.request.featureName}" from the project path "${sourcePath}".`,
       `Use the available tools to inspect the code, copy relevant assets into the workspace (${baseDir}), and build a production-ready PLGN pack.`,
       'Requirements:',
@@ -221,13 +224,18 @@ export async function createPackFromSource(params: CreatePackParams): Promise<Cr
       `Work from the source path: ${sourcePath}.`
     ].join('\n');
 
+    if (semanticHints.length) {
+      agenticPrompt += `\nSemantic hints:\n${semanticHints.map((hint) => `- ${hint}`).join('\n')}`;
+    }
+
     const agenticPack = await params.agent.runToolLoop({
       systemPrompt: params.agent.systemPrompt,
       initialUserPrompt: agenticPrompt,
       tools: AGENTIC_TOOLS,
       workspace: baseDir,
       verbose: Boolean(params.request.verbose),
-      timeoutMs: params.request.timeoutMs
+      timeoutMs: params.request.timeoutMs,
+      maxIterations: fastMode ? 4 : undefined
     });
 
     const manifestPath = join(baseDir, 'manifest.json');
@@ -252,7 +260,11 @@ export async function createPackFromSource(params: CreatePackParams): Promise<Cr
   const pack = await params.agent.extractFeature(
     sourcePath,
     params.request.featureName,
-    params.request.language
+    params.request.language,
+    {
+      hints: semanticHints,
+      fast: fastMode
+    }
   );
   return materializePack(pack, {
     nameOverride: params.name,
@@ -261,6 +273,7 @@ export async function createPackFromSource(params: CreatePackParams): Promise<Cr
 }
 
 export async function createPackFromPrompt(params: CreatePackParams): Promise<CreatePackResult> {
+  const semanticHints = params.semanticHints ?? [];
   const language = params.request.language ?? params.agent.defaults.language ?? 'any';
   const normalizedLanguage = language === 'auto-detect' ? 'any' : language;
   const featureName = params.request.featureName;
@@ -297,6 +310,10 @@ export async function createPackFromPrompt(params: CreatePackParams): Promise<Cr
     rootDir: process.cwd(),
     sourcePaths: []
   };
+
+  if (semanticHints.length) {
+    manifest.description = `${manifest.description}\n\nSemantic hints:\n${semanticHints.map((hint) => `- ${hint}`).join('\n')}`;
+  }
 
   const profile = {
     language: normalizedLanguage,
@@ -364,8 +381,6 @@ async function materializePack(pack: Pack, options: {
     name: normalizedName
   };
 
-  await writeJson(join(baseDir, 'manifest.json'), manifest, { spaces: 2 });
-
   const languages = dedupe(
     pack.sourcePaths.map((file) => detectLanguageFromPath(file)).filter(Boolean)
   );
@@ -376,10 +391,12 @@ async function materializePack(pack: Pack, options: {
   await ensureDir(join(baseDir, 'source'));
   // Expose workspace path for agent logs
   process.env.PLGN_PACK_DIR = baseDir;
+  const sourcePathMap = new Map<string, string>();
   for (const file of pack.sourcePaths) {
     const language = detectLanguageFromPath(file) || 'misc';
     const relativePath = relative(pack.rootDir, file);
-    const destination = join(baseDir, 'source', language, relativePath || basename(file));
+    const destinationRelative = join('source', language, relativePath || basename(file));
+    const destination = join(baseDir, destinationRelative);
     await ensureDir(dirname(destination));
     if (await pathExists(file)) {
       await copy(file, destination);
@@ -390,7 +407,26 @@ async function materializePack(pack: Pack, options: {
       const contents = implemented?.contents ?? `Placeholder for ${file}`;
       await writeText(destination, contents);
     }
+    sourcePathMap.set(file, destinationRelative);
   }
+
+  if (manifest.source_credits?.original?.startsWith('/')) {
+    manifest.source_credits.original = `extracted-feature-${manifest.name}`;
+  }
+
+  if (manifest.examples?.entries) {
+    manifest.examples.entries = manifest.examples.entries.map((entry: any) => {
+      const mappedPath = sourcePathMap.get(entry.path);
+      const language = entry.language ?? detectLanguageFromPath(entry.path) ?? 'unknown';
+      return {
+        ...entry,
+        path: mappedPath ?? entry.path,
+        language
+      };
+    });
+  }
+
+  await writeJson(join(baseDir, 'manifest.json'), manifest, { spaces: 2 });
 
   await ensureDir(join(baseDir, 'patterns'));
   await writeJson(join(baseDir, 'patterns', 'structure.json'), {

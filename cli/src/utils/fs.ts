@@ -2,6 +2,8 @@ import fsExtra from 'fs-extra';
 const { readdir, readFile, writeFile, stat, mkdirp } = fsExtra;
 import { join, extname, dirname } from 'node:path';
 
+const DEFAULT_IGNORES = new Set(['node_modules', '.git', '.plgn', 'dist', 'build', '.next', '.turbo']);
+
 const LANGUAGE_MAP: Record<string, string> = {
   '.ts': 'typescript',
   '.tsx': 'typescript',
@@ -16,12 +18,21 @@ const LANGUAGE_MAP: Record<string, string> = {
 };
 
 export async function listFilesRecursive(root: string): Promise<string[]> {
+  const stats = await stat(root);
+
+  if (!stats.isDirectory()) {
+    return stats.isFile() ? [root] : [];
+  }
+
   const entries = await readdir(root);
   const results: string[] = [];
   for (const entry of entries) {
+    if (DEFAULT_IGNORES.has(entry)) {
+      continue;
+    }
     const fullPath = join(root, entry);
-    const stats = await stat(fullPath);
-    if (stats.isDirectory()) {
+    const entryStats = await stat(fullPath);
+    if (entryStats.isDirectory()) {
       const nested = await listFilesRecursive(fullPath);
       results.push(...nested);
     } else {

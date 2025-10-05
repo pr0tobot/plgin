@@ -214,7 +214,7 @@ const INTEGRATION_TOOLS: ToolDefinition[] = [
 
 export async function integratePack(params: IntegratePackParams): Promise<IntegrationResult> {
   const verboseLog = params.verbose
-    ? (message: string) => console.log(`[plgn:add] ${message}`)
+    ? (message: string) => console.log(`[plgn:apply] ${message}`)
     : undefined;
 
   verboseLog?.(`Loading pack from ${params.packRef}`);
@@ -224,6 +224,33 @@ export async function integratePack(params: IntegratePackParams): Promise<Integr
     : params.targetLanguage;
   const profile = await deriveProjectProfile(targetLanguage);
   verboseLog?.(`Target language resolved to ${targetLanguage}`);
+
+  let semanticHints = Array.isArray(params.semanticHints) ? [...params.semanticHints] : [];
+  if ((params.fast || semanticHints.length === 0) && params.semanticProvider?.isEnabled()) {
+    try {
+      const hits = await params.semanticProvider.searchPacks(pack.manifest.name, targetLanguage);
+      const normalizedName = pack.manifest.name.toLowerCase();
+      const limit = params.fast ? 3 : 2;
+      const mapped = hits
+        .filter((hit) => hit.packName.toLowerCase() === normalizedName || !normalizedName)
+        .slice(0, limit)
+        .map((hit) => {
+          const tagSummary = hit.tags?.length ? ` [${hit.tags.slice(0, 3).join(', ')}]` : '';
+          return `${hit.packName}@${hit.version}: ${hit.summary}${tagSummary}`;
+        });
+      for (const hint of mapped) {
+        if (!semanticHints.includes(hint)) {
+          semanticHints.push(hint);
+        }
+      }
+      semanticHints = semanticHints.slice(0, limit);
+    } catch (error) {
+      verboseLog?.(`Semantic hint lookup failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  if (semanticHints.length) {
+    verboseLog?.(`Using ${semanticHints.length} semantic hint(s) to guide integration.`);
+  }
 
   const requiresAgentic = params.agentic || !hasLanguageExample(pack, targetLanguage);
   verboseLog?.(`Integration mode: ${requiresAgentic ? 'agentic (implementFeature)' : 'direct adaptation via adaptPack'}`);
@@ -235,7 +262,9 @@ export async function integratePack(params: IntegratePackParams): Promise<Integr
       profile,
       targetLanguage,
       projectRoot: process.cwd(),
-      extraInstructions: params.instructions
+      extraInstructions: params.instructions,
+      semanticHints,
+      fastMode: Boolean(params.fast)
     });
     const changeSet = await params.agent.integrateWithTools({
       systemPrompt: params.agent.systemPrompt,
@@ -243,7 +272,8 @@ export async function integratePack(params: IntegratePackParams): Promise<Integr
       tools: INTEGRATION_TOOLS,
       pack,
       projectRoot: process.cwd(),
-      verbose: params.verbose
+      verbose: params.verbose,
+      maxIterations: params.fast ? 5 : undefined
     });
     const minConfidence = typeof pack.manifest.ai_adaptation?.min_confidence === 'number'
       ? pack.manifest.ai_adaptation.min_confidence
@@ -300,8 +330,10 @@ function buildIntegrationPrompt(options: {
   targetLanguage: string;
   projectRoot: string;
   extraInstructions?: string;
+  semanticHints?: string[];
+  fastMode?: boolean;
 }): string {
-  const { pack, profile, targetLanguage, projectRoot, extraInstructions } = options;
+  const { pack, profile, targetLanguage, projectRoot, extraInstructions, semanticHints = [], fastMode } = options;
   const manifest = pack.manifest;
   const projectSummary = [
     `Target language: ${targetLanguage}`,
@@ -329,8 +361,16 @@ function buildIntegrationPrompt(options: {
     `Pack manifest summary:\n${manifestSummary}`
   ];
 
+  if (fastMode) {
+    instructions.unshift('Fast mode is enabled: focus on high-impact changes, avoid redundant analysis, and finalise once the core integration is ready.');
+  }
+
   if (extraInstructions?.trim()) {
     instructions.push(`Additional user instructions: ${extraInstructions.trim()}`);
+  }
+
+  if (semanticHints.length) {
+    instructions.push(`Semantic hints from registry:\n${semanticHints.map((hint) => `- ${hint}`).join('\n')}`);
   }
 
   return instructions.join('\n\n');

@@ -120,7 +120,7 @@ export interface AgentTaskContext {
 }
 
 export interface ConfigPreferences {
-  autoApplyAdd: boolean;
+  autoApplyChanges: boolean;
 }
 
 export interface SemanticConfig {
@@ -128,6 +128,20 @@ export interface SemanticConfig {
   agentSource?: string;
   tags?: string[];
   searchLimit?: number;
+}
+
+export interface SemanticSearchHit {
+  contextId: string;
+  packName: string;
+  version: string;
+  summary: string;
+  tags: string[];
+  metadata?: Record<string, unknown>;
+}
+
+export interface SemanticProvider {
+  isEnabled(): boolean;
+  searchPacks(query: string, language?: string): Promise<SemanticSearchHit[]>;
 }
 
 export interface ConfigFile {
@@ -147,6 +161,7 @@ export interface FeatureExtractionRequest {
   prompt?: string;
   verbose?: boolean;
   timeoutMs?: number;
+  fast?: boolean;
   /**
    * Extra examples policy:
    * - 'none' to skip
@@ -238,6 +253,7 @@ export interface CreatePackParams {
   request: FeatureExtractionRequest;
   outputDir: string;
   name?: string;
+  semanticHints?: string[];
 }
 
 export interface CreatePackResult {
@@ -261,6 +277,9 @@ export interface IntegratePackParams {
   agentic: boolean;
   targetLanguage: string;
   verbose?: boolean;
+  semanticHints?: string[];
+  semanticProvider?: SemanticProvider;
+  fast?: boolean;
 }
 
 export interface CompatibilityOptions {
@@ -328,6 +347,7 @@ export interface RunToolLoopOptions {
   verbose?: boolean;
   timeoutMs?: number;
   onEvent?: (event: AgentEvent) => void;
+  maxIterations?: number;
 }
 
 export interface IntegrationToolLoopOptions {
@@ -339,12 +359,13 @@ export interface IntegrationToolLoopOptions {
   verbose?: boolean;
   timeoutMs?: number;
   onEvent?: (event: AgentEvent) => void;
+  maxIterations?: number;
 }
 
 export interface PLGNAgent {
   readonly defaults: PLGNDefaults;
   readonly systemPrompt: string;
-  extractFeature(path: string, featureName: string, lang?: string): Promise<Pack>;
+  extractFeature(path: string, featureName: string, lang?: string, options?: { hints?: string[]; fast?: boolean }): Promise<Pack>;
   runToolLoop(options: RunToolLoopOptions): Promise<Pack>;
   analyzeCompatibility(pack: Pack, project: string, lang?: string): Promise<CompatibilityReport>;
   adaptPack(pack: Pack, project: string, instructions?: string): Promise<ChangeSet>;

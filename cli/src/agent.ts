@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { join, resolve, isAbsolute, dirname, basename, relative, sep } from 'node:path';
+import { join, resolve, isAbsolute, dirname, basename, relative, sep, extname } from 'node:path';
 import fsExtra from 'fs-extra';
-const { readJson, writeJson, ensureDir, pathExists, readFile, appendFile, writeFile, copy } = fsExtra;
-import OpenAI from 'openai';
+const { readJson, writeJson, ensureDir, pathExists, readFile, appendFile, writeFile, copy, stat } = fsExtra;
+import OpenAI, { type ClientOptions } from 'openai';
 import chalk from 'chalk';
+import { ProxyAgent, setGlobalDispatcher, type Dispatcher } from 'undici';
 import {
   listFilesRecursive,
   detectLanguageFromPath
@@ -30,6 +31,15 @@ import type {
   RunToolLoopOptions,
   IntegrationToolLoopOptions
 } from './types.js';
+
+const IGNORED_DIRECTORY_SEGMENTS = new Set(['node_modules', '.git', '.plgn', 'dist', 'build', '.next', '.turbo']);
+const DEP_PARSE_EXTS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs']);
+const DEP_CANDIDATE_EXTS = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.json', '.css', '.scss', '.sass', '.less', '.md', '.mdx', '.svg', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico'];
+const MAX_DEPENDENCY_EXPANSION = 250;
+const FAST_SNIPPET_CHARS = 2000;
+const DEFAULT_SNIPPET_CHARS = 8000;
+const FAST_SNIPPET_LIMIT = 12;
+const DEFAULT_SNIPPET_LIMIT = 40;
 
 export const PLGN_SYSTEM_PROMPT = `You are PLGN, an expert feature extraction and integration agent for any programming language.
 
@@ -59,6 +69,7 @@ class HybridAgent implements PLGNAgent {
   private readonly cacheDir: string;
   private readonly providerToken?: string;
   private readonly client: OpenAI;
+  private proxyDispatcher?: Dispatcher;
 
   constructor(private readonly options: CreateAgentOptions) {
     this.defaults = options.config.defaults;
@@ -76,14 +87,32 @@ class HybridAgent implements PLGNAgent {
       }
     }
 
-    this.client = new OpenAI({
+    const clientOptions: ClientOptions = {
       baseURL,
       apiKey,
       defaultHeaders: {
         'HTTP-Referer': 'https://github.com/plgn/cli',
         'X-Title': 'PLGN CLI'
       }
-    });
+    };
+
+    const proxyUrl = process.env.HTTPS_PROXY
+      ?? process.env.https_proxy
+      ?? process.env.HTTP_PROXY
+      ?? process.env.http_proxy;
+
+    if (proxyUrl) {
+      try {
+        const dispatcher = new ProxyAgent(proxyUrl);
+        this.proxyDispatcher = dispatcher;
+        setGlobalDispatcher(dispatcher);
+        void this.logProgress(`Configured proxy for OpenAI requests via ${proxyUrl}`);
+      } catch (error) {
+        console.warn(chalk.yellow(`Warning: failed to configure HTTPS proxy (${proxyUrl}): ${error instanceof Error ? error.message : String(error)}`));
+      }
+    }
+
+    this.client = new OpenAI(clientOptions);
   }
 
   private async callLLM(
@@ -347,7 +376,11 @@ class HybridAgent implements PLGNAgent {
       ]);
     };
 
+    const maxIterations = options.maxIterations ?? Number.POSITIVE_INFINITY;
+    let iterations = 0;
+
     while (true) {
+      iterations += 1;
       emitEvent('heartbeat', { messages: conversation.length });
 
       const response = await withTimeout(
@@ -404,6 +437,25 @@ class HybridAgent implements PLGNAgent {
         }
       }
 
+      if (finalPack) {
+        break;
+      }
+
+      if (iterations >= maxIterations) {
+        emitEvent('complete', { reason: 'max_iterations' });
+        const packDir = workspace;
+        const manifestPath = join(packDir, 'manifest.json');
+        if (!finalPack && await pathExists(manifestPath)) {
+          try {
+            const manifest = await readJson(manifestPath) as PackManifest;
+            const sourcePaths = await listFilesRecursive(join(packDir, 'source'));
+            finalPack = { manifest, rootDir: packDir, sourcePaths };
+          } catch {
+            // ignore fallback failure
+          }
+        }
+        break;
+      }
     }
 
     if (!finalPack) {
@@ -642,10 +694,14 @@ class HybridAgent implements PLGNAgent {
       ]);
     };
 
+    const maxIterations = options.maxIterations ?? Number.POSITIVE_INFINITY;
+    let iterations = 0;
+
     while (true) {
       if (finalized) {
         break;
       }
+      iterations += 1;
       emitEvent('heartbeat', { messages: conversation.length, staged: changeMap.size });
 
       const response = await withTimeout(
@@ -718,6 +774,11 @@ class HybridAgent implements PLGNAgent {
         if (finalized) {
           break;
         }
+      }
+
+      if (iterations >= maxIterations) {
+        emitEvent('complete', { reason: 'max_iterations' });
+        break;
       }
     }
 
@@ -816,24 +877,241 @@ class HybridAgent implements PLGNAgent {
     }
   }
 
-  async extractFeature(path: string, featureName: string, lang?: string): Promise<Pack> {
+  private async resolveProjectRoot(entryPath: string): Promise<string> {
+    const stats = await stat(entryPath);
+    let current = stats.isDirectory() ? entryPath : dirname(entryPath);
+    let fallback = current;
+
+    for (let depth = 0; depth < 8; depth++) {
+      if (
+        (await pathExists(join(current, 'package.json')))
+        || (await pathExists(join(current, 'pnpm-workspace.yaml')))
+        || (await pathExists(join(current, '.git')))
+      ) {
+        return current;
+      }
+      fallback = current;
+      const parent = dirname(current);
+      if (parent === current) {
+        break;
+      }
+      current = parent;
+    }
+
+    return fallback;
+  }
+
+  private shouldSkipPath(path: string): boolean {
+    const segments = path.split(sep);
+    return segments.some((segment) => IGNORED_DIRECTORY_SEGMENTS.has(segment));
+  }
+
+  private shouldParseForDependencies(path: string): boolean {
+    return DEP_PARSE_EXTS.has(extname(path));
+  }
+
+  private extractRelativeSpecifiers(contents: string): string[] {
+    const results = new Set<string>();
+    const patterns = [
+      /(?:import|export)\s+[^;'"`]*?from\s+['"]([^'"`]+)['"]/g,
+      /import\s*\(\s*['"]([^'"`]+)['"]\s*\)/g,
+      /require\(\s*['"]([^'"`]+)['"]\s*\)/g
+    ];
+
+    for (const pattern of patterns) {
+      let match: RegExpExecArray | null;
+      while ((match = pattern.exec(contents)) !== null) {
+        const specifier = match[1];
+        if (typeof specifier === 'string' && specifier.startsWith('.')) {
+          results.add(specifier);
+        }
+      }
+    }
+
+    return Array.from(results);
+  }
+
+  private sanitizeSpecifier(specifier: string): string {
+    return specifier.split('?')[0]?.split('#')[0] ?? specifier;
+  }
+
+  private async resolveSpecifierPaths(fromFile: string, specifier: string): Promise<string[]> {
+    const baseDir = dirname(fromFile);
+    const sanitized = this.sanitizeSpecifier(specifier);
+    const basePath = resolve(baseDir, sanitized);
+    const candidates: string[] = [];
+
+    const tryAdd = async (candidate: string) => {
+      if (this.shouldSkipPath(candidate)) {
+        return;
+      }
+      if (await pathExists(candidate)) {
+        const stats = await stat(candidate);
+        if (stats.isFile()) {
+          candidates.push(candidate);
+        } else if (stats.isDirectory()) {
+          for (const extension of DEP_CANDIDATE_EXTS) {
+            const indexPath = join(candidate, `index${extension}`);
+            if (await pathExists(indexPath)) {
+              const indexStats = await stat(indexPath);
+              if (indexStats.isFile()) {
+                candidates.push(indexPath);
+              }
+            }
+          }
+        }
+      }
+    };
+
+    if (extname(basePath)) {
+      await tryAdd(basePath);
+    } else {
+      for (const extension of DEP_CANDIDATE_EXTS) {
+        await tryAdd(`${basePath}${extension}`);
+      }
+      await tryAdd(basePath);
+    }
+
+    return candidates;
+  }
+
+  private prioritizeFiles(files: string[], hints: string[]): string[] {
+    if (!hints.length) {
+      return files;
+    }
+
+    const tokens = new Set<string>();
+    for (const hint of hints) {
+      const pieces = hint.toLowerCase().split(/[^a-z0-9]+/g).filter((piece) => piece.length > 2 && piece.length < 40);
+      for (const piece of pieces.slice(0, 40)) {
+        tokens.add(piece);
+      }
+    }
+
+    if (!tokens.size) {
+      return files;
+    }
+
+    return files
+      .map((file) => {
+        const parts = file.toLowerCase().split(/[^a-z0-9]+/g);
+        const score = parts.reduce((acc, part) => acc + (tokens.has(part) ? 1 : 0), 0);
+        return { file, score };
+      })
+      .sort((a, b) => {
+        if (b.score !== a.score) {
+          return b.score - a.score;
+        }
+        return a.file.localeCompare(b.file);
+      })
+      .map((entry) => entry.file);
+  }
+
+  private async expandWithDependencies(initialFiles: string[], projectRoot: string): Promise<Set<string>> {
+    const expanded = new Set<string>();
+    const queue: string[] = [];
+    const normalizedRoot = projectRoot.endsWith(sep) ? projectRoot : `${projectRoot}${sep}`;
+
+    for (const file of initialFiles) {
+      if (this.shouldSkipPath(file)) {
+        continue;
+      }
+      expanded.add(file);
+      queue.push(file);
+    }
+
+    while (queue.length > 0 && expanded.size < MAX_DEPENDENCY_EXPANSION) {
+      const current = queue.shift() as string;
+      if (!(await pathExists(current))) {
+        continue;
+      }
+      if (!this.shouldParseForDependencies(current)) {
+        continue;
+      }
+
+      let contents: string;
+      try {
+        contents = await readFile(current, 'utf8');
+      } catch {
+        continue;
+      }
+
+      const specifiers = this.extractRelativeSpecifiers(contents);
+      for (const specifier of specifiers) {
+        const resolvedPaths = await this.resolveSpecifierPaths(current, specifier);
+        for (const resolvedPath of resolvedPaths) {
+          if (expanded.has(resolvedPath)) {
+            continue;
+          }
+          if (
+            resolvedPath !== projectRoot
+            && !resolvedPath.startsWith(normalizedRoot)
+          ) {
+            continue;
+          }
+          expanded.add(resolvedPath);
+          queue.push(resolvedPath);
+          if (expanded.size >= MAX_DEPENDENCY_EXPANSION) {
+            break;
+          }
+        }
+        if (expanded.size >= MAX_DEPENDENCY_EXPANSION) {
+          break;
+        }
+      }
+    }
+
+    return expanded;
+  }
+
+  async extractFeature(path: string, featureName: string, lang?: string, options?: { hints?: string[]; fast?: boolean }): Promise<Pack> {
+    const hints = options?.hints ?? [];
+    const fast = options?.fast ?? false;
     const resolved = isAbsolute(path) ? path : resolve(process.cwd(), path);
     if (!(await pathExists(resolved))) {
       throw new Error(`Feature path not found: ${resolved}`);
     }
     await this.logProgress(`Starting extraction for "${featureName}" from ${resolved}`);
 
-    const cacheKey = `extract:${resolved}:${featureName}:${lang ?? 'auto'}`;
+    const hintKey = hints.length
+      ? hints.map((hint) => hint.toLowerCase().replace(/[^a-z0-9]+/g, '-')).join('.').slice(0, 64)
+      : 'none';
+    const cacheKey = `extract:${resolved}:${featureName}:${lang ?? 'auto'}:${fast ? 'fast' : 'full'}:${hintKey}`;
     const cached = await this.readCache<Pack>(cacheKey);
     if (cached) {
       return cached;
     }
 
-    const files = await listFilesRecursive(resolved);
-    console.log(`Found ${files.length} files in the feature directory.`);
-    await this.logProgress(`Found ${files.length} files in the feature directory`);
+    if (fast) {
+      console.log(chalk.gray('Fast mode enabled: prioritizing key files and limiting analysis iterations.'));
+      await this.logProgress('Fast extraction mode enabled');
+    }
+
+    if (hints.length) {
+      console.log(chalk.gray(`Using ${hints.length} semantic hint(s) to prioritize related files.`));
+      await this.logProgress(`Semantic hints applied (${hints.length})`);
+    }
+
+    const projectRoot = await this.resolveProjectRoot(resolved);
+    const initialFiles = await listFilesRecursive(resolved);
+    const expandedFiles = await this.expandWithDependencies(initialFiles, projectRoot);
+    const files = Array.from(expandedFiles).sort();
+    console.log(`Found ${initialFiles.length} files in the feature scope (expanded to ${files.length} with dependencies).`);
+    await this.logProgress(`Found ${initialFiles.length} files (expanded to ${files.length} with dependencies)`);
+
+    const initialSet = new Set(initialFiles);
+    const tracedDependencies = files.filter((file) => !initialSet.has(file));
+    if (tracedDependencies.length) {
+      console.log(`Included ${tracedDependencies.length} supporting file(s) discovered via relative imports.`);
+      await this.logProgress(`Included ${tracedDependencies.length} supporting dependency files`);
+    }
     const languages = new Set<string>();
     const codeSnippets: string[] = [];
+
+    const prioritizedFiles = this.prioritizeFiles(files, hints);
+    const snippetLimit = fast ? FAST_SNIPPET_LIMIT : DEFAULT_SNIPPET_LIMIT;
+    const snippetFiles = prioritizedFiles.slice(0, snippetLimit);
+    const snippetSet = new Set(snippetFiles);
 
     console.log('Reading source files and detecting languages...');
     await this.logProgress('Reading source files and detecting languages');
@@ -842,13 +1120,36 @@ class HybridAgent implements PLGNAgent {
       const detected = detectLanguageFromPath(file);
       if (detected !== 'unknown') {
         languages.add(detected);
-        try {
-          const content = await readFile(file, 'utf-8');
-          codeSnippets.push(`// File: ${file}\n${content}`);
-        } catch (err) {
-          // Skip files we can't read
-        }
       }
+
+      if (!snippetSet.has(file)) {
+        continue;
+      }
+
+      try {
+        const content = await readFile(file, 'utf-8');
+        const limit = fast ? FAST_SNIPPET_CHARS : DEFAULT_SNIPPET_CHARS;
+        const trimmed = content.length > limit ? `${content.slice(0, limit)}\n// ... truncated for fast mode` : content;
+        codeSnippets.push(`// File: ${relative(projectRoot, file)}\n${trimmed}`);
+      } catch {
+        // Skip files we can't read
+      }
+    }
+
+    if (!codeSnippets.length && files.length) {
+      const fallback = files[0];
+      try {
+        const content = await readFile(fallback, 'utf-8');
+        const limit = fast ? FAST_SNIPPET_CHARS : DEFAULT_SNIPPET_CHARS;
+        const trimmed = content.length > limit ? content.slice(0, limit) : content;
+        codeSnippets.push(`// File: ${relative(projectRoot, fallback)}\n${trimmed}`);
+      } catch {
+        // ignore fallback failure
+      }
+    }
+
+    if (codeSnippets.length) {
+      await this.logProgress(`Prepared ${codeSnippets.length} focused snippet(s) for analysis`);
     }
     console.log(`Detected languages: ${Array.from(languages).join(', ')}`);
     await this.logProgress(`Detected languages: ${Array.from(languages).join(', ')}`);
@@ -860,21 +1161,14 @@ class HybridAgent implements PLGNAgent {
     console.log('Analyzing feature with AI...');
     await this.logProgress('Analyzing feature with AI');
     // Use AI to analyze the feature
+    const hintsSection = hints.length
+      ? `Semantic hints:\n${hints.map((hint) => `- ${hint}`).join('\n')}\n\n`
+      : '';
+    const modeNote = fast
+      ? 'Fast mode is enabled; prioritize concise, high-signal insights.'
+      : '';
     const analysisPrompt = `Analyze this codebase and extract metadata for the feature "${featureName}".
-
-Code samples:
-${codeSnippets.join('\n\n---\n\n')}
-
-Respond with JSON only (no markdown):
-{
-  "description": "brief description of the feature",
-  "dependencies": ["list", "of", "dependencies"],
-  "frameworks": ["detected", "frameworks"],
-  "provides": {
-    "feature": "main capability"
-  },
-  "modularBreakdown": ["list of modular components or sub-features"]
-}`;
+${modeNote ? `${modeNote}\n` : ''}${hintsSection}Code samples:\n${codeSnippets.join('\n\n---\n\n')}\n\nRespond with JSON only (no markdown):\n{\n  "description": "brief description of the feature",\n  "dependencies": ["list", "of", "dependencies"],\n  "frameworks": ["detected", "frameworks"],\n  "provides": {\n    "feature": "main capability"\n  },\n  "modularBreakdown": ["list of modular components or sub-features"]\n}`;
 
     const analysisResult = await this.callLLM(
       'You are a code analysis expert. Extract feature metadata from code. Return only valid JSON.',

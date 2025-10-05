@@ -20,7 +20,7 @@ const defaultsSchema = z.object({
 });
 
 const preferencesSchema = z.object({
-  autoApplyAdd: z.boolean().default(false)
+  autoApplyChanges: z.boolean().default(false)
 });
 
 const semanticSchema = z.object({
@@ -45,7 +45,7 @@ const configSchema = z.object({
   defaults: defaultsSchema,
   providerOptions: z.record(z.string(), z.unknown()).default({}),
   tokens: z.record(z.string(), z.string().optional()).default({}),
-  preferences: preferencesSchema.default({ autoApplyAdd: false }),
+  preferences: preferencesSchema.default({ autoApplyChanges: false }),
   registry: registrySchema,
   semantic: semanticSchema
 });
@@ -61,7 +61,7 @@ const DEFAULT_CONFIG: ConfigFile = {
   providerOptions: {},
   tokens: {},
   preferences: {
-    autoApplyAdd: false
+    autoApplyChanges: false
   },
   registry: {},
   semantic: {

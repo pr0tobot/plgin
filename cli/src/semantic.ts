@@ -1,19 +1,10 @@
 import { join, relative } from 'node:path';
 import fsExtra from 'fs-extra';
 const { ensureDir, pathExists, readJson, writeJson, readFile } = fsExtra;
-import type { ConfigFile, PackManifest, SemanticConfig } from './types.js';
+import type { ConfigFile, PackManifest, SemanticConfig, SemanticSearchHit } from './types.js';
 
 interface SemanticMapping {
   packs: Record<string, Record<string, { contextId: string; updatedAt: string }>>;
-}
-
-export interface SemanticSearchHit {
-  contextId: string;
-  packName: string;
-  version: string;
-  summary: string;
-  tags: string[];
-  metadata?: Record<string, unknown>;
 }
 
 export interface SemanticIndexPackOptions {

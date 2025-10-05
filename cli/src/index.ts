@@ -29,6 +29,7 @@ import { discoverPacks, publishPack } from './registry.js';
 import { checkCompatibility, integratePack } from './integrator.js';
 import { applyChangeSet } from './utils/diff.js';
 import { createAgent } from './agent.js';
+import { createSemanticService } from './semantic.js';
 
 const moduleDir = fileURLToPath(new URL('.', import.meta.url));
 const cliRoot = resolve(moduleDir, '..');
@@ -110,8 +111,8 @@ program
   .addOption(new Option('--security-scanner <scanner>').choices(['snyk', 'trivy', 'custom', 'none']))
   .option('--token <token>', 'persist API token for active provider')
   .option('--clear-token', 'remove token for active provider')
-  .option('--auto-apply-add', 'enable automatic apply after successful integration')
-  .option('--no-auto-apply-add', 'disable automatic apply after integration')
+  .option('--auto-apply', 'enable automatic apply after successful integration')
+  .option('--no-auto-apply', 'disable automatic apply after integration')
   .option('--registry-url <url>', 'set registry URL')
   .option('--registry-org <org>', 'set GitHub org for registry')
   .option('--github-token <token>', 'set GitHub token for registry')
@@ -134,12 +135,12 @@ program
       if (flags.securityScanner) overrides.securityScanner = flags.securityScanner;
 
       let updated = mergeDefaults(config, overrides);
-      let preferences = updated.preferences ?? { autoApplyAdd: false };
-      if (flags.autoApplyAdd) {
-        preferences = { ...preferences, autoApplyAdd: true };
+      let preferences = updated.preferences ?? { autoApplyChanges: false };
+      if (flags.autoApply) {
+        preferences = { ...preferences, autoApplyChanges: true };
       }
-      if (flags.noAutoApplyAdd) {
-        preferences = { ...preferences, autoApplyAdd: false };
+      if (flags.noAutoApply) {
+        preferences = { ...preferences, autoApplyChanges: false };
       }
 
       let registry = updated.registry ?? {};
@@ -183,6 +184,7 @@ program
   .option('--out-dir <path>', 'where to output the new pack', 'packs')
   .option('--verbose', 'enable verbose agent logs')
   .option('--timeout <ms>', 'overall timeout in milliseconds', (value) => parseInt(value))
+  .option('--fast', 'favor speed with semantic hints and fewer agent iterations')
   .option('--examples <policy>', 'extra examples policy (none|auto|csv)', 'none')
   .action(async (input: string | undefined, flags) => {
     let spinner = ora('Extracting feature...').start();
@@ -210,6 +212,7 @@ program
     try {
       const config = await loadConfig();
       const env = getEnv();
+      const semantic = createSemanticService(config, env.cacheDir);
       const agent = createAgent({
         config,
         token: resolveToken(config, config.defaults.provider),
@@ -231,7 +234,8 @@ program
           agentic: Boolean(flags.agentic),
           verbose: Boolean(flags.verbose),
           timeoutMs,
-          examples: flags.examples
+          examples: flags.examples,
+          fast: Boolean(flags.fast)
         };
       } else if (input.startsWith('./') || input.startsWith('/') || input.includes('/')) {
         // Treat as path
@@ -244,7 +248,8 @@ program
           agentic: Boolean(flags.agentic),
           verbose: Boolean(flags.verbose),
           timeoutMs,
-          examples: flags.examples
+          examples: flags.examples,
+          fast: Boolean(flags.fast)
         };
       } else {
         // Treat as prompt
@@ -257,8 +262,20 @@ program
           agentic: true, // Default for prompts
           verbose: Boolean(flags.verbose),
           timeoutMs,
-          examples: flags.examples
+          examples: flags.examples,
+          fast: Boolean(flags.fast)
         };
+      }
+
+      let semanticHints: string[] = [];
+      if (semantic.isEnabled() && request.fast) {
+        try {
+          const languageHint = request.language ?? config.defaults.language;
+          const hits = await semantic.searchPacks(request.featureName, languageHint);
+          semanticHints = hits.slice(0, 3).map((hit) => `${hit.packName}@${hit.version}: ${hit.summary}`);
+        } catch (error) {
+          console.warn(chalk.yellow(`Warning: semantic hint lookup failed: ${error instanceof Error ? error.message : String(error)}`));
+        }
       }
 
       if (request.verbose) {
@@ -274,14 +291,16 @@ program
           agent,
           request,
           outputDir: flags.outDir,
-          name: flags.name
+          name: flags.name,
+          semanticHints
         }));
       } else {
         result = await withTimeout(createPackFromSource({
           agent,
           request,
           outputDir: flags.outDir,
-          name: flags.name
+          name: flags.name,
+          semanticHints
         }));
       }
 
@@ -365,20 +384,23 @@ program
   });
 
 program
-  .command('add <packRef>')
-  .description('Integrate a pack into the current project')
+  .command('apply <packRef>')
+  .description('Apply a pack into the current project')
+  .alias('add')
   .option('--instructions <text>', 'custom integration instructions')
   .option('--dry-run', 'preview without writing changes')
   .option('--agentic', 'force agentic integration path')
   .option('--lang <language>', 'target language override')
   .option('--verbose', 'enable verbose integration logs')
+  .option('--fast', 'favor speed with semantic hints and fewer agent iterations')
   .action(async (packRef: string, flags) => {
     try {
       const config = await loadConfig();
       const env = getEnv();
+      const semantic = createSemanticService(config, env.cacheDir);
       const verbose = Boolean(flags.verbose);
       const verboseLog = verbose
-        ? (message: string) => console.log(chalk.gray(`[plgn:add] ${message}`))
+        ? (message: string) => console.log(chalk.gray(`[plgn:apply] ${message}`))
         : undefined;
       const agent = createAgent({
         config,
@@ -393,7 +415,9 @@ program
         dryRun: Boolean(flags.dryRun),
         agentic: Boolean(flags.agentic),
         targetLanguage: flags.lang ?? config.defaults.language,
-        verbose
+        verbose,
+        semanticProvider: semantic,
+        fast: Boolean(flags.fast)
       });
       spinner.stop();
       console.log(chalk.green(`Integration prepared with confidence ${(result.changeSet.confidence * 100).toFixed(1)}%`));
@@ -423,11 +447,11 @@ program
           console.log(`  ${finding.id} (${finding.severity}) - ${finding.title}`);
         }
       }
-      const autoApplyAdd = config.preferences?.autoApplyAdd ?? false;
+      const autoApplyPreference = config.preferences?.autoApplyChanges ?? false;
 
       if (flags.dryRun) {
         console.log(chalk.gray('Dry run requested: no files were modified.'));
-        if (autoApplyAdd) {
+        if (autoApplyPreference) {
           console.log(chalk.gray('Auto-apply preference ignored in dry-run mode.'));
         }
         return;
@@ -438,7 +462,7 @@ program
         }
         return;
       }
-      if (autoApplyAdd) {
+      if (autoApplyPreference) {
         console.log(chalk.gray('Auto-apply preference enabled; applying change set.'));
         const summary = await applyChangeSet(result.changeSet, {
           projectRoot: process.cwd(),

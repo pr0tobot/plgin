@@ -21,7 +21,7 @@ const TEST_CONFIG: ConfigFile = {
     openrouter: process.env.OPENROUTER_API_KEY || process.env.PLGN_API_KEY
   },
   preferences: {
-    autoApplyAdd: false
+    autoApplyChanges: false
   },
   registry: {},
   semantic: {
