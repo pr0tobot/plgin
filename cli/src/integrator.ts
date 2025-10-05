@@ -481,13 +481,10 @@ async function downloadPackFromRegistry(ref: string): Promise<string> {
   await writeFile(tempTarPath, buffer);
 
   try {
-    await extract(
-      {
-        file: tempTarPath,
-        cwd: tempDir
-      },
-      ['.']
-    );
+    await extract({
+      file: tempTarPath,
+      cwd: tempDir
+    });
     await remove(tempTarPath); // Clean up temp tar file
   } catch (error) {
     await remove(tempDir);
