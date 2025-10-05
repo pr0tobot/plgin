@@ -256,8 +256,9 @@ export async function integratePack(params: IntegratePackParams): Promise<Integr
     verboseLog?.(`Using ${semanticHints.length} semantic hint(s) to guide integration.`);
   }
 
-  const requiresAgentic = params.agentic || !hasLanguageExample(pack, targetLanguage);
-  verboseLog?.(`Integration mode: ${requiresAgentic ? 'agentic (implementFeature)' : 'direct adaptation via adaptPack'}`);
+  // Always use agentic mode for proper semantic integration
+  const requiresAgentic = true;
+  verboseLog?.(`Integration mode: agentic (full semantic integration)`);
 
   if (requiresAgentic) {
     verboseLog?.('Invoking integration tool loop to synthesize change set');
@@ -277,7 +278,7 @@ export async function integratePack(params: IntegratePackParams): Promise<Integr
       pack,
       projectRoot: process.cwd(),
       verbose: params.verbose,
-      maxIterations: params.fast ? 5 : undefined
+      maxIterations: params.fast ? 15 : undefined
     });
     const minConfidence = typeof pack.manifest.ai_adaptation?.min_confidence === 'number'
       ? pack.manifest.ai_adaptation.min_confidence
@@ -463,7 +464,7 @@ async function downloadPackFromRegistry(ref: string): Promise<string> {
   }
 
   const token = resolveGitHubToken();
-  const headers: Record<string, string> = { 'User-Agent': 'plgin-cli/2.0.6' };
+  const headers: Record<string, string> = { 'User-Agent': 'plgin-cli/2.0.7' };
   if (token) {
     headers['Authorization'] = `token ${token}`;
   }
