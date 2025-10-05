@@ -214,7 +214,7 @@ const INTEGRATION_TOOLS: ToolDefinition[] = [
 
 export async function integratePack(params: IntegratePackParams): Promise<IntegrationResult> {
   const verboseLog = params.verbose
-    ? (message: string) => console.log(`[plgn:apply] ${message}`)
+    ? (message: string) => console.log(`[plgin:apply] ${message}`)
     : undefined;
 
   verboseLog?.(`Loading pack from ${params.packRef}`);

@@ -1,8 +1,8 @@
 # plgin
 
-[![npm version](https://img.shields.io/npm/v/@pr0tobot/plgin.svg)](https://www.npmjs.com/package/@pr0tobot/plgin)
+[![npm version](https://img.shields.io/npm/v/plgin.svg)](https://www.npmjs.com/package/plgin)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![Node Version](https://img.shields.io/node/v/@pr0tobot/plgin.svg)](https://www.npmjs.com/package/@pr0tobot/plgin)
+[![Node Version](https://img.shields.io/node/v/plgin.svg)](https://www.npmjs.com/package/plgin)
 
 Semantic feature extraction and integration across any programming language.
 
@@ -20,7 +20,7 @@ Semantic feature extraction and integration across any programming language.
 ## Installation
 
 ```bash
-npm install -g @pr0tobot/plgin
+npm install -g plgin
 ```
 
 **Requirements:**

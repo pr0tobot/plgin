@@ -74,7 +74,7 @@ export class SemanticService {
 
       await this.saveMapping(mapping);
     } catch (error) {
-      console.warn('[plgn:semantic] Failed to index pack with Nia MCP:', error instanceof Error ? error.message : error);
+      console.warn('[plgin:semantic] Failed to index pack with Nia MCP:', error instanceof Error ? error.message : error);
     }
   }
 
@@ -129,7 +129,7 @@ export class SemanticService {
       }
       return results;
     } catch (error) {
-      console.warn('[plgn:semantic] Failed to query Nia contexts:', error instanceof Error ? error.message : error);
+      console.warn('[plgin:semantic] Failed to query Nia contexts:', error instanceof Error ? error.message : error);
       return [];
     }
   }
@@ -152,7 +152,7 @@ export class SemanticService {
         return data;
       }
     } catch (error) {
-      console.warn('[plgn:semantic] Failed to read semantic cache:', error instanceof Error ? error.message : error);
+      console.warn('[plgin:semantic] Failed to read semantic cache:', error instanceof Error ? error.message : error);
     }
     this.mappingCache = { ...DEFAULT_MAPPING };
     return this.mappingCache;
@@ -164,7 +164,7 @@ export class SemanticService {
       await writeJson(this.mappingPath, mapping, { spaces: 2 });
       this.mappingCache = mapping;
     } catch (error) {
-      console.warn('[plgn:semantic] Failed to persist semantic cache:', error instanceof Error ? error.message : error);
+      console.warn('[plgin:semantic] Failed to persist semantic cache:', error instanceof Error ? error.message : error);
     }
   }
 

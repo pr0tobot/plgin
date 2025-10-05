@@ -121,13 +121,14 @@ export async function publishPack(params: PublishPackParams): Promise<PublishRes
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'User-Agent': 'plgin-cli/1.9.1'
+      'User-Agent': 'plgin-cli/2.0.0'
     },
     body: JSON.stringify({
       name: manifest.name,
       version: manifest.version,
       languages: manifest.requirements.languages,
       description: manifest.description,
+      semantic_tags: manifest.semantic_tags || {},
       tarball_base64: tarballBuffer.toString('base64'),
       author
     })
@@ -149,7 +150,7 @@ export async function publishPack(params: PublishPackParams): Promise<PublishRes
   const proxyReadUrl = getRegistryEndpoint();
   const registryResponse = await fetch(`${proxyReadUrl}/registry/index`, {
     headers: {
-      'User-Agent': 'plgin-cli/1.9.1'
+      'User-Agent': 'plgin-cli/2.0.0'
     }
   });
 
@@ -186,7 +187,7 @@ async function maybeIndexPackSemantics(params: PublishPackParams, manifest: Pack
     try {
       sourcePaths = await listFilesRecursive(sourceRoot);
     } catch (error) {
-      console.warn('[plgn:semantic] Failed to enumerate pack source files:', error instanceof Error ? error.message : error);
+      console.warn('[plgin:semantic] Failed to enumerate pack source files:', error instanceof Error ? error.message : error);
     }
   }
 

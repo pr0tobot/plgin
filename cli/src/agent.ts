@@ -1194,7 +1194,7 @@ class HybridAgent implements PLGNAgent {
       ? 'Fast mode is enabled; prioritize concise, high-signal insights.'
       : '';
     const analysisPrompt = `Analyze this codebase and extract metadata for the feature "${featureName}".
-${modeNote ? `${modeNote}\n` : ''}${hintsSection}Code samples:\n${codeSnippets.join('\n\n---\n\n')}\n\nRespond with JSON only (no markdown):\n{\n  "description": "brief description of the feature",\n  "dependencies": ["list", "of", "dependencies"],\n  "frameworks": ["detected", "frameworks"],\n  "provides": {\n    "feature": "main capability"\n  },\n  "modularBreakdown": ["list of modular components or sub-features"]\n}`;
+${modeNote ? `${modeNote}\n` : ''}${hintsSection}Code samples:\n${codeSnippets.join('\n\n---\n\n')}\n\nRespond with JSON only (no markdown):\n{\n  "description": "brief description of the feature",\n  "dependencies": ["list", "of", "dependencies"],\n  "frameworks": ["detected", "frameworks"],\n  "provides": {\n    "feature": "main capability"\n  },\n  "modularBreakdown": ["list of modular components or sub-features"],\n  "semanticTags": {\n    "architecture": ["design patterns", "architectural styles"],\n    "patterns": ["code patterns", "idioms", "best practices"],\n    "ui_ux": ["interface components", "design systems", "accessibility features"],\n    "components": ["reusable modules", "functions", "classes"],\n    "dependencies": ["required packages", "frameworks", "libraries"],\n    "conventions": ["naming conventions", "code style", "formatting"],\n    "features": ["capabilities", "functionality", "behaviors"]\n  }\n}`;
 
     const analysisResult = await this.callLLM(
       'You are a code analysis expert. Extract feature metadata from code. Return only valid JSON.',
@@ -1248,6 +1248,15 @@ ${modeNote ? `${modeNote}\n` : ''}${hintsSection}Code samples:\n${codeSnippets.j
         preserve: ['security-measures'],
         adaptable: ['lang-syntax', 'file-structure'],
         min_confidence: 0.8
+      },
+      semantic_tags: metadata.semanticTags || {
+        architecture: [],
+        patterns: [],
+        ui_ux: [],
+        components: [],
+        dependencies: metadata.dependencies || [],
+        conventions: [],
+        features: [metadata.provides?.feature || featureName]
       }
     };
 

@@ -403,7 +403,7 @@ program
       const semantic = createSemanticService(config, env.cacheDir);
       const verbose = Boolean(flags.verbose);
       const verboseLog = verbose
-        ? (message: string) => console.log(chalk.gray(`[plgn:apply] ${message}`))
+        ? (message: string) => console.log(chalk.gray(`[plgin:apply] ${message}`))
         : undefined;
       const agent = createAgent({
         config,
