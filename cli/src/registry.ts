@@ -7,6 +7,7 @@ import { validatePackStructure, generateComplianceReport } from './lifecycle.js'
 import { createSemanticService } from './semantic.js';
 import { getEnv } from './config.js';
 import { listFilesRecursive } from './utils/fs.js';
+import { getRegistryEndpoint } from './defaults.js';
 import type {
   RegistryPackSummary,
   RegistryEntry,
@@ -51,11 +52,11 @@ async function discoverFromGitHub(
   token: string,
   org: string
 ): Promise<RegistryPackSummary[]> {
-  const client = new GitHubClient({ token, org });
   const cacheDir = process.env.PLGN_ACTIVE_CACHE_DIR || join(process.cwd(), '.plgn', 'cache');
   const cacheFile = join(cacheDir, `registry-${Date.now()}.json`);
 
-  const entries = await client.getRegistryIndex();
+  const proxyUrl = getRegistryEndpoint();
+  const entries = await fetchRegistryFromProxy(proxyUrl);
 
   await ensureDir(cacheDir);
   await writeJson(cacheFile, { timestamp: Date.now(), entries }, { spaces: 2 });
@@ -63,6 +64,21 @@ async function discoverFromGitHub(
   const filtered = filterByLanguage(entries, options.language);
   const prioritized = await prioritizeEntries(filtered, options.query, options.language, semantic);
   return prioritized.map((entry) => toSummary(entry, config));
+}
+
+async function fetchRegistryFromProxy(proxyUrl: string): Promise<RegistryEntry[]> {
+  const response = await fetch(`${proxyUrl}/registry/index`, {
+    headers: {
+      'User-Agent': 'plgn-cli/1.9.0'
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch registry from proxy: ${response.statusText}`);
+  }
+
+  const data = await response.json() as { entries: RegistryEntry[]; cached_at: string };
+  return data.entries;
 }
 
 async function discoverFromLocal(

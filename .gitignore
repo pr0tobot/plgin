@@ -15,6 +15,7 @@ build/
 .env.local
 .env.*.local
 *.key
+proxy/.env
 
 # IDE and editor files
 .vscode/

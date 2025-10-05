@@ -72,7 +72,7 @@ const program = new Command();
 program
   .name('plgn')
   .description('PLGN hybrid feature pack CLI (language agnostic)')
-  .version('1.8.0');
+  .version('1.9.0');
 
 function handleError(err: unknown): void {
   const message = err instanceof Error ? err.message : String(err);
