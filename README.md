@@ -10,7 +10,7 @@ npm install -g @pr0tobot/plgn
 
 ## Quick Start
 
-Set your OpenRouter API key:
+Set your OpenRouter API key (only credential needed):
 ```bash
 export OPENROUTER_API_KEY="sk-or-..."
 ```
@@ -20,9 +20,15 @@ Create a feature pack from a prompt:
 plgn create "Build a user authentication system"
 ```
 
-Or extract from existing code:
+Discover and add packs (no additional credentials needed):
 ```bash
-plgn create ./src/auth --name auth-pack
+plgn discover --query "authentication"
+plgn add auth-pack
+```
+
+Publish your pack (no GitHub token needed):
+```bash
+plgn publish ./my-pack
 ```
 
 ## Commands
@@ -47,18 +53,11 @@ Default config:
 - Security: Vulnerability scanning enabled
 - Semantic discovery: Nia MCP contexts (disable with `plgn config --semantic-provider disabled`)
 
-### Semantic Discovery (Nia MCP)
+### Semantic Discovery
 
-PLGN can enrich discovery and integration with semantic search powered by Nia MCP contexts.
+PLGN uses semantic search powered by Nia MCP to help you discover relevant packs. This feature is enabled by default and requires no additional configuration - the service uses org-managed credentials via a secure proxy.
 
-Configure the credentials (already supported via `.env.local`):
-
-```bash
-export NIA_API_KEY="nk-..."
-export NIA_API_URL="https://apigcp.trynia.ai/"
-```
-
-When enabled, `plgn publish` automatically indexes packs into Nia contexts, and `plgn discover` ranks results using semantic similarity plus language filters.
+When you run `plgn discover`, results are ranked using semantic similarity and language filters to find the most relevant packs for your needs.
 
 ## Features
 

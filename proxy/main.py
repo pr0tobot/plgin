@@ -24,7 +24,8 @@ image = (
         "pydantic>=2.5.0",
         "httpx>=0.26.0",
         "PyGithub==2.1.1",
-        "python-dotenv>=1.0.0"
+        "python-dotenv>=1.0.0",
+        "requests>=2.31.0"
     )
 )
 
@@ -47,6 +48,15 @@ class PublishIndexRequest(BaseModel):
     entries: List[Dict[str, Any]] = Field(..., description="Registry entries")
     message: str = Field(..., description="Commit message")
     admin_token: str = Field(..., description="Admin authentication token")
+
+class PublishPackRequest(BaseModel):
+    """Request to publish a pack"""
+    name: str = Field(..., description="Pack name")
+    version: str = Field(..., description="Pack version (semver)")
+    languages: List[str] = Field(..., description="Supported languages")
+    description: str = Field(..., description="Pack description")
+    tarball_base64: str = Field(..., description="Base64-encoded tarball")
+    author: str = Field(default="community", description="Author name")
 
 
 def check_rate_limit(ip: str, endpoint: str, limit: int = 100, window: int = 3600) -> bool:
@@ -280,5 +290,159 @@ def proxy_app():
 
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Failed to update registry: {str(e)}")
+
+    @api.post("/registry/publish")
+    async def publish_pack(
+        req: PublishPackRequest,
+        request: Request,
+        user_agent: Optional[str] = Header(None)
+    ):
+        """
+        Publish a pack to the registry
+        No auth required (rate-limited to 10 req/hr per IP)
+        """
+        client_ip = request.client.host
+
+        # Verify client
+        if not verify_plgn_client(user_agent):
+            raise HTTPException(status_code=403, detail="Invalid client")
+
+        # Rate limit (strict for publishing)
+        if not check_rate_limit(client_ip, "registry_publish", limit=10):
+            raise HTTPException(status_code=429, detail="Rate limit exceeded (10 publishes/hour)")
+
+        try:
+            import base64
+            import hashlib
+            from github import Github
+            import json
+
+            # Decode tarball
+            try:
+                tarball_bytes = base64.b64decode(req.tarball_base64)
+            except Exception:
+                raise HTTPException(status_code=400, detail="Invalid base64 tarball")
+
+            # Compute checksum
+            checksum = hashlib.sha256(tarball_bytes).hexdigest()
+
+            # Use org GitHub token
+            github_token = os.environ.get("GITHUB_TOKEN")
+            if not github_token:
+                raise HTTPException(status_code=500, detail="Server configuration error")
+
+            g = Github(github_token)
+            repo = g.get_repo("PR0TO-IDE/plgn-registry")
+
+            # Create release
+            tag_name = f"{req.name}@{req.version}"
+            try:
+                release = repo.create_git_release(
+                    tag=tag_name,
+                    name=f"{req.name} v{req.version}",
+                    message=f"Pack release for {req.name} v{req.version}\n\nChecksum (SHA256): `{checksum}`\nAuthor: {req.author}"
+                )
+            except Exception as e:
+                # Release might already exist
+                if "already_exists" in str(e).lower() or "already exists" in str(e).lower():
+                    raise HTTPException(status_code=409, detail=f"Release {tag_name} already exists")
+                raise
+
+            # Upload tarball as release asset
+            filename = f"{req.name}-{req.version}.tgz"
+            try:
+                asset = release.upload_asset(
+                    path="",  # Not used when content_type is provided
+                    label=filename,
+                    content_type="application/gzip",
+                    name=filename
+                )
+                # PyGithub doesn't support direct bytes upload well, use requests
+                import requests
+                upload_url = release.upload_url.replace("{?name,label}", f"?name={filename}")
+                headers = {
+                    "Authorization": f"token {github_token}",
+                    "Content-Type": "application/gzip"
+                }
+                upload_response = requests.post(upload_url, headers=headers, data=tarball_bytes)
+
+                if upload_response.status_code not in [200, 201]:
+                    raise Exception(f"Asset upload failed: {upload_response.text}")
+
+                asset_data = upload_response.json()
+                download_url = asset_data["browser_download_url"]
+            except Exception as e:
+                # Clean up release if asset upload fails
+                try:
+                    release.delete_release()
+                except:
+                    pass
+                raise HTTPException(status_code=500, detail=f"Failed to upload asset: {str(e)}")
+
+            # Update registry.json
+            try:
+                # Get current registry
+                try:
+                    content = repo.get_contents("registry.json")
+                    entries = json.loads(base64.b64decode(content.content).decode('utf-8'))
+                    registry_sha = content.sha
+                except Exception:
+                    entries = []
+                    registry_sha = None
+
+                # Create new entry
+                new_entry = {
+                    "name": req.name,
+                    "version": req.version,
+                    "languages": req.languages,
+                    "description": req.description,
+                    "downloadUrl": download_url,
+                    "checksum": checksum,
+                    "publishedAt": datetime.utcnow().isoformat() + "Z",
+                    "author": req.author
+                }
+
+                # Check if pack version already exists
+                existing_index = next(
+                    (i for i, e in enumerate(entries) if e.get("name") == req.name and e.get("version") == req.version),
+                    None
+                )
+
+                if existing_index is not None:
+                    entries[existing_index] = new_entry
+                else:
+                    entries.append(new_entry)
+
+                # Update registry.json
+                content_str = json.dumps(entries, indent=2)
+                if registry_sha:
+                    repo.update_file(
+                        "registry.json",
+                        f"Publish {req.name}@{req.version}",
+                        content_str,
+                        registry_sha
+                    )
+                else:
+                    repo.create_file(
+                        "registry.json",
+                        f"Publish {req.name}@{req.version}",
+                        content_str
+                    )
+
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Failed to update registry: {str(e)}")
+
+            return {
+                "status": "success",
+                "url": release.html_url,
+                "version": req.version,
+                "checksum": checksum,
+                "downloadUrl": download_url
+            }
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Publish failed: {str(e)}")
 
     return api

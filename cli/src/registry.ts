@@ -69,7 +69,7 @@ async function discoverFromGitHub(
 async function fetchRegistryFromProxy(proxyUrl: string): Promise<RegistryEntry[]> {
   const response = await fetch(`${proxyUrl}/registry/index`, {
     headers: {
-      'User-Agent': 'plgn-cli/1.9.0'
+      'User-Agent': 'plgn-cli/1.9.1'
     }
   });
 
@@ -93,14 +93,7 @@ async function discoverFromLocal(
 }
 
 export async function publishPack(params: PublishPackParams): Promise<PublishResult> {
-  const token = resolveGitHubToken();
-  const org = resolveGitHubOrg();
-
-  if (!token) {
-    throw new Error('GITHUB_TOKEN environment variable not set. Cannot publish to GitHub registry.');
-  }
-
-  console.log(`Publishing to GitHub org: ${org}`);
+  console.log('Publishing pack to registry via proxy...');
 
   const validation = await validatePackStructure(params.packDir);
   if (!validation.valid) {
@@ -120,54 +113,64 @@ export async function publishPack(params: PublishPackParams): Promise<PublishRes
   const manifest = (await readJson(manifestPath)) as PackManifest;
 
   const tarballBuffer = await createPackTarball(params.packDir, manifest.name, manifest.version);
-  const checksum = GitHubClient.computeChecksum(tarballBuffer);
 
-  const client = new GitHubClient({ token, org });
-  await client.ensureRegistryRepo();
+  const proxyUrl = getRegistryEndpoint();
+  const author = process.env.GIT_AUTHOR_NAME || 'community';
 
-  const releaseUrl = await client.createRelease(manifest.name, manifest.version, '', checksum);
+  const response = await fetch(`${proxyUrl}/registry/publish`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'User-Agent': 'plgn-cli/1.9.1'
+    },
+    body: JSON.stringify({
+      name: manifest.name,
+      version: manifest.version,
+      languages: manifest.requirements.languages,
+      description: manifest.description,
+      tarball_base64: tarballBuffer.toString('base64'),
+      author
+    })
+  });
 
-  const filename = `${manifest.name}-${manifest.version}.tgz`;
-  const downloadUrl = await client.uploadReleaseAsset(releaseUrl, tarballBuffer, filename);
-
-  const entries = await client.getRegistryIndex();
-  const existingIndex = entries.findIndex((e) => e.name === manifest.name && e.version === manifest.version);
-
-  const newEntry: RegistryEntry = {
-    name: manifest.name,
-    version: manifest.version,
-    languages: manifest.requirements.languages,
-    description: manifest.description,
-    downloadUrl,
-    checksum,
-    publishedAt: new Date().toISOString(),
-    author: process.env.GIT_AUTHOR_NAME || 'unknown'
-  };
-
-  if (existingIndex >= 0) {
-    entries[existingIndex] = newEntry;
-  } else {
-    entries.push(newEntry);
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(`Publish failed: ${errorData.detail || response.statusText}`);
   }
 
-  await client.updateRegistryIndex(entries, `Publish ${manifest.name}@${manifest.version}`);
+  const result = await response.json() as {
+    status: string;
+    url: string;
+    version: string;
+    checksum: string;
+    downloadUrl: string;
+  };
 
-  const localSummaries = entries.map((e) => ({
-    name: e.name,
-    version: e.version,
-    languages: e.languages,
-    description: e.description,
-    compatibilityScore: 0.8
-  }));
+  const proxyReadUrl = getRegistryEndpoint();
+  const registryResponse = await fetch(`${proxyReadUrl}/registry/index`, {
+    headers: {
+      'User-Agent': 'plgn-cli/1.9.1'
+    }
+  });
 
-  await persistLocalRegistry(localSummaries);
+  if (registryResponse.ok) {
+    const registryData = await registryResponse.json() as { entries: RegistryEntry[] };
+    const localSummaries = registryData.entries.map((e) => ({
+      name: e.name,
+      version: e.version,
+      languages: e.languages,
+      description: e.description,
+      compatibilityScore: 0.8
+    }));
+    await persistLocalRegistry(localSummaries);
+  }
 
   await maybeIndexPackSemantics(params, manifest);
 
   return {
-    url: releaseUrl,
-    version: manifest.version,
-    checksum
+    url: result.url,
+    version: result.version,
+    checksum: result.checksum
   };
 }
 
