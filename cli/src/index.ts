@@ -73,7 +73,7 @@ const program = new Command();
 program
   .name('plgin')
   .description('Semantic feature extraction and integration across any programming language')
-  .version('2.0.0');
+  .version('2.0.3');
 
 function handleError(err: unknown): void {
   const message = err instanceof Error ? err.message : String(err);

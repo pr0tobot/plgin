@@ -18,9 +18,10 @@ import type {
   PublishResult
 } from './types.js';
 
+
 const LOCAL_REGISTRY_PATH = join(process.cwd(), '.plgin', 'registry.json');
 
-function resolveGitHubToken(): string | undefined {
+export function resolveGitHubToken(): string | undefined {
   return process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
 }
 
@@ -66,10 +67,10 @@ async function discoverFromGitHub(
   return prioritized.map((entry) => toSummary(entry, config));
 }
 
-async function fetchRegistryFromProxy(proxyUrl: string): Promise<RegistryEntry[]> {
+export async function fetchRegistryFromProxy(proxyUrl: string): Promise<RegistryEntry[]> {
   const response = await fetch(`${proxyUrl}/registry/index`, {
     headers: {
-      'User-Agent': 'plgin-cli/2.0.0'
+      'User-Agent': 'plgin-cli/2.0.3'
     }
   });
 
@@ -112,6 +113,13 @@ export async function publishPack(params: PublishPackParams): Promise<PublishRes
   const manifestPath = join(params.packDir, 'manifest.json');
   const manifest = (await readJson(manifestPath)) as PackManifest;
 
+  // Check semantic similarity before publishing
+  const similarity = await checkSimilarity(manifest);
+  if (similarity.similar) {
+    throw new Error(`Pack too similar to existing pack "${similarity.similarPack}" (similarity score: ${similarity.maxScore.toFixed(3)}). Please modify the description/tags or rename the pack to publish.`);
+  }
+  console.log(`Similarity check passed (max score: ${similarity.maxScore.toFixed(3)})`);
+
   const tarballBuffer = await createPackTarball(params.packDir, manifest.name, manifest.version);
 
   const proxyUrl = getRegistryEndpoint();
@@ -121,7 +129,7 @@ export async function publishPack(params: PublishPackParams): Promise<PublishRes
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'User-Agent': 'plgin-cli/2.0.0'
+      'User-Agent': 'plgin-cli/2.0.3'
     },
     body: JSON.stringify({
       name: manifest.name,
@@ -150,7 +158,7 @@ export async function publishPack(params: PublishPackParams): Promise<PublishRes
   const proxyReadUrl = getRegistryEndpoint();
   const registryResponse = await fetch(`${proxyReadUrl}/registry/index`, {
     headers: {
-      'User-Agent': 'plgin-cli/2.0.0'
+      'User-Agent': 'plgin-cli/2.0.3'
     }
   });
 
@@ -312,4 +320,40 @@ function toSummary(entry: RegistryEntry, config: ConfigFile): RegistryPackSummar
 
 function packKey(name: string, version: string): string {
   return `${name.toLowerCase()}@${version}`;
+}
+
+async function checkSimilarity(manifest: PackManifest): Promise<{ similar: boolean; maxScore: number; similarPack?: string }> {
+  const proxyUrl = getRegistryEndpoint();
+  const similarityUrl = `${proxyUrl}/registry/similarity`;
+
+  const payload = {
+    description: manifest.description,
+    semantic_tags: manifest.semantic_tags
+  };
+
+  try {
+    const response = await fetch(similarityUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'User-Agent': 'plgin-cli/2.0.3'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      console.warn(`Similarity check failed (${response.status}): ${response.statusText}. Proceeding with publish.`);
+      return { similar: false, maxScore: 0 };
+    }
+
+    const result = await response.json();
+    return {
+      similar: result.similar,
+      maxScore: result.max_score,
+      similarPack: result.similar_pack
+    };
+  } catch (error) {
+    console.warn(`Similarity check error: ${error instanceof Error ? error.message : String(error)}. Proceeding with publish.`);
+    return { similar: false, maxScore: 0 };
+  }
 }

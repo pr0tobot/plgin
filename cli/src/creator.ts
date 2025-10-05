@@ -1,4 +1,5 @@
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import fsExtra from 'fs-extra';
 const { ensureDir, pathExists, copy, writeJson, readJson } = fsExtra;
 import {
@@ -6,13 +7,16 @@ import {
   detectLanguageFromPath,
   writeText
 } from './utils/fs.js';
+import { fetchRegistryFromProxy } from './registry.js';
+import { getRegistryEndpoint } from './defaults.js';
 import type {
   CreatePackParams,
   CreatePackResult,
   Pack,
   PackManifest,
   PackImplementationPlan,
-  ToolDefinition
+  ToolDefinition,
+  RegistryEntry
 } from './types.js';
 
 
@@ -372,7 +376,22 @@ async function materializePack(pack: Pack, options: {
     docs?: { path: string; contents: string; language: string; action: string }[];
   };
 }): Promise<CreatePackResult> {
-  const normalizedName = sanitizeName(options.nameOverride ?? pack.manifest.name);
+  let normalizedName = sanitizeName(options.nameOverride ?? pack.manifest.name);
+
+  // Check for name conflicts in registry and make unique if needed
+  try {
+    const proxyUrl = getRegistryEndpoint();
+    const entries: RegistryEntry[] = await fetchRegistryFromProxy(proxyUrl);
+    const existing = entries.find(e => e.name === normalizedName);
+    if (existing) {
+      const suffix = randomUUID().slice(0, 8);
+      normalizedName += `-${suffix}`;
+      console.log(`Name conflict detected with existing pack, using unique name: ${normalizedName}`);
+    }
+  } catch (error) {
+    console.warn(`Could not check registry for name conflicts: ${error instanceof Error ? error.message : String(error)}. Proceeding with original name.`);
+  }
+
   const baseDir = resolve(process.cwd(), options.outputDir, normalizedName);
   await ensureDir(baseDir);
 

@@ -1,11 +1,14 @@
 import { join, resolve } from 'node:path';
 import fsExtra from 'fs-extra';
-const { pathExists, readJson } = fsExtra;
+const { pathExists, readJson, ensureDir, remove, writeFile } = fsExtra;
 import {
   detectLanguageFromPath,
   listFilesRecursive
 } from './utils/fs.js';
 import { buildChangeSetPreview } from './utils/diff.js';
+import { fetchRegistryFromProxy, resolveGitHubToken } from './registry.js';
+import { getRegistryEndpoint } from './defaults.js';
+import { extract } from 'tar';
 import type {
   CompatibilityOptions,
   CompatibilityReport,
@@ -16,7 +19,8 @@ import type {
   ProjectProfile,
   PackManifest,
   FileDiff,
-  ToolDefinition
+  ToolDefinition,
+  RegistryEntry
 } from './types.js';
 
 export async function checkCompatibility(options: CompatibilityOptions): Promise<CompatibilityReport> {
@@ -397,12 +401,14 @@ async function preparePreview(
 }
 
 async function loadPack(ref: string): Promise<Pack> {
+  let packDir: string | undefined;
+
+  // First, try local paths
   const candidatePaths = [
     ref,
     resolve(process.cwd(), ref),
     resolve(process.cwd(), 'packs', ref)
   ];
-  let packDir: string | undefined;
   for (const candidate of candidatePaths) {
     const resolvedCandidate = resolve(candidate);
     if (await pathExists(resolvedCandidate)) {
@@ -410,9 +416,12 @@ async function loadPack(ref: string): Promise<Pack> {
       break;
     }
   }
+
+  // If not local, try registry
   if (!packDir) {
-    throw new Error(`Pack not found for reference: ${ref}`);
+    packDir = await downloadPackFromRegistry(ref);
   }
+
   const manifestPath = join(packDir, 'manifest.json');
   if (!(await pathExists(manifestPath))) {
     throw new Error(`manifest.json missing in pack ${packDir}`);
@@ -425,6 +434,81 @@ async function loadPack(ref: string): Promise<Pack> {
     rootDir: packDir,
     sourcePaths
   };
+}
+
+async function downloadPackFromRegistry(ref: string): Promise<string> {
+  const proxyUrl = getRegistryEndpoint();
+  const entries: RegistryEntry[] = await fetchRegistryFromProxy(proxyUrl);
+
+  let targetEntry: RegistryEntry | undefined;
+  const [name, version] = ref.split('@');
+
+  if (version) {
+    // Exact version match
+    targetEntry = entries.find(e => e.name === name && e.version === version);
+  } else {
+    // Find latest version for the name
+    const nameEntries = entries.filter(e => e.name === name);
+    if (nameEntries.length === 0) {
+      throw new Error(`Pack not found in registry: ${name}`);
+    }
+    // Simple version sort (assumes semver, takes highest numeric)
+    targetEntry = nameEntries.reduce((latest, current) =>
+      compareVersions(latest.version, current.version) > 0 ? latest : current
+    );
+  }
+
+  if (!targetEntry) {
+    throw new Error(`Pack version not found in registry: ${ref}`);
+  }
+
+  const token = resolveGitHubToken();
+  const headers: Record<string, string> = { 'User-Agent': 'plgin-cli/2.0.2' };
+  if (token) {
+    headers['Authorization'] = `token ${token}`;
+  }
+
+  const response = await fetch(targetEntry.downloadUrl, { headers });
+  if (!response.ok) {
+    throw new Error(`Failed to download pack: ${response.status} ${response.statusText}`);
+  }
+  const buffer = Buffer.from(await response.arrayBuffer());
+
+  const tempDir = join(process.env.TMPDIR || '/tmp', `plgin-${targetEntry.name}-${Date.now()}`);
+  await ensureDir(tempDir);
+
+  const tempTarPath = join(tempDir, `${targetEntry.name}.tgz`);
+  await writeFile(tempTarPath, buffer);
+
+  try {
+    await extract(
+      {
+        file: tempTarPath,
+        cwd: tempDir
+      },
+      ['.']
+    );
+    await remove(tempTarPath); // Clean up temp tar file
+  } catch (error) {
+    await remove(tempDir);
+    throw new Error(`Failed to extract pack: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  return tempDir;
+}
+
+function compareVersions(v1: string, v2: string): number {
+  // Simple semver compare: split by . and compare numerically
+  const parts1 = v1.split('.').map(p => parseInt(p, 10));
+  const parts2 = v2.split('.').map(p => parseInt(p, 10));
+  const len = Math.max(parts1.length, parts2.length);
+  for (let i = 0; i < len; i++) {
+    const p1 = parts1[i] || 0;
+    const p2 = parts2[i] || 0;
+    if (p1 > p2) return 1;
+    if (p1 < p2) return -1;
+  }
+  return 0;
 }
 
 function computeCompatibility(pack: Pack, targetLanguage: string): CompatibilityReport {

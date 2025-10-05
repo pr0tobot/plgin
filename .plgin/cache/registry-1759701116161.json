@@ -1,0 +1,17 @@
+{
+  "timestamp": 1759701120914,
+  "entries": [
+    {
+      "name": "hero-component",
+      "version": "0.1.0",
+      "languages": [
+        "typescript"
+      ],
+      "description": "A full-screen hero banner component with background image, gradient overlays, title, description, and call-to-action buttons.",
+      "downloadUrl": "https://github.com/PR0TO-IDE/plgin-registry/releases/download/hero-component-0.1.0/hero-component-0.1.0.tgz",
+      "checksum": "b5ed0761b8c5d5ae5787a4333ab3bce5da0b76984fdbde60caa3e56b00611b8f",
+      "publishedAt": "2025-10-05T21:50:14.289149Z",
+      "author": "community"
+    }
+  ]
+}
