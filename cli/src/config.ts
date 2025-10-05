@@ -34,10 +34,7 @@ const DEFAULT_CONFIG: ConfigFile = {
     securityScanner: 'snyk'
   },
   providerOptions: {},
-  tokens: {
-    openrouter: process.env.PLGN_API_KEY,
-    xai: process.env.PLGN_XAI_KEY
-  }
+  tokens: {}
 };
 
 export const getEnv = () => ({
@@ -78,7 +75,8 @@ export function mergeDefaults(current: ConfigFile, overrides: Partial<PLGNDefaul
 
 export function resolveToken(config: ConfigFile, provider: Provider): string | undefined {
   const envKey = `PLGN_${provider.toUpperCase()}_API_KEY`;
-  return process.env[envKey] ?? config.tokens[provider];
+  const providerEnvKey = `${provider.toUpperCase()}_API_KEY`;
+  return process.env[envKey] ?? process.env[providerEnvKey] ?? config.tokens[provider];
 }
 
 export function upsertToken(config: ConfigFile, provider: Provider, token: string | undefined): ConfigFile {

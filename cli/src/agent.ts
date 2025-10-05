@@ -65,7 +65,14 @@ class HybridAgent implements PLGNAgent {
 
     // Initialize OpenRouter client
     const baseURL = this.getBaseURL();
-    const apiKey = this.providerToken || process.env.OPENROUTER_API_KEY || 'dummy-key';
+    let apiKey = this.providerToken || 'dummy-key';
+    if (apiKey === 'dummy-key') {
+      if (this.defaults.provider === 'openrouter') {
+        apiKey = process.env.OPENROUTER_API_KEY || apiKey;
+      } else if (this.defaults.provider === 'xai') {
+        apiKey = process.env.XAI_API_KEY || apiKey;
+      }
+    }
 
     this.client = new OpenAI({
       baseURL,
@@ -77,12 +84,24 @@ class HybridAgent implements PLGNAgent {
     });
   }
 
-  private async callLLM(systemPrompt: string, userPrompt: string, temperature?: number, tools?: ToolDefinition[]): Promise<any> {
+  private async callLLM(
+    systemPrompt: string,
+    userPrompt: string,
+    temperature?: number,
+    tools?: ToolDefinition[],
+    conversation?: any[]
+  ): Promise<any> {
     try {
-      const messages = [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt }
-      ];
+      const messages = conversation && conversation.length > 0
+        ? conversation
+        : [
+            ...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []),
+            ...(userPrompt ? [{ role: 'user', content: userPrompt }] : [])
+          ];
+
+      if (messages.length === 0) {
+        throw new Error('callLLM requires at least one message.');
+      }
 
       const params: any = {
         model: this.defaults.model,
@@ -101,6 +120,11 @@ class HybridAgent implements PLGNAgent {
       console.error('LLM call failed:', error);
       throw new Error(`AI provider error: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
+  }
+
+  private extractMessageContent(response: any): string {
+    const content = response?.choices?.[0]?.message?.content;
+    return typeof content === 'string' ? content.trim() : '';
   }
 
   async runToolLoop(options: RunToolLoopOptions): Promise<Pack> {
@@ -137,6 +161,9 @@ class HybridAgent implements PLGNAgent {
       const safePath = resolve(workspace, dir);
       if (!safePath.startsWith(workspace)) {
         return JSON.stringify({ error: 'Path traversal not allowed' });
+      }
+      if (!(await pathExists(safePath))) {
+        return JSON.stringify({ error: 'Directory not found' });
       }
       const files = await listFilesRecursive(safePath);
       return JSON.stringify({ files: files.map(f => relative(workspace, f)) });
@@ -218,7 +245,22 @@ class HybridAgent implements PLGNAgent {
       // Normalize manifest, ensure patterns/agents/tests exist
       const manifestPath = resolve(workspace, 'manifest.json');
       if (await pathExists(manifestPath)) {
-        let packManifest = await readJson(manifestPath) as PackManifest;
+                let packManifest = await readJson(manifestPath) as PackManifest;
+                if (!packManifest.requirements) {
+                  packManifest.requirements = {
+                    languages: ['any'],
+                    frameworks: ['agnostic'],
+                    minVersion: {}
+                  };
+                } else {
+                  packManifest.requirements.languages = packManifest.requirements.languages?.length
+                    ? packManifest.requirements.languages
+                    : ['any'];
+                  packManifest.requirements.frameworks = packManifest.requirements.frameworks?.length
+                    ? packManifest.requirements.frameworks
+                    : ['agnostic'];
+                  packManifest.requirements.minVersion = packManifest.requirements.minVersion ?? {};
+                }
         // Normalize examples to relative paths
         if (packManifest.examples?.entries) {
           packManifest.examples.entries = packManifest.examples.entries.map((entry: any) => ({
@@ -226,10 +268,16 @@ class HybridAgent implements PLGNAgent {
             path: `source/${entry.language}/${basename(entry.path)}`
           }));
         }
-        // Sanitize source_credits
-        if (packManifest.source_credits.original.startsWith('/')) {
-          packManifest.source_credits.original = `extracted-feature-${packManifest.name}`;
-        }
+                // Ensure source credits exist and sanitize path-based defaults
+                if (!packManifest.source_credits) {
+                  packManifest.source_credits = {
+                    original: `extracted-feature-${packManifest.name}`,
+                    opt_out_training: false
+                  };
+                }
+                if (packManifest.source_credits.original?.startsWith('/')) {
+                  packManifest.source_credits.original = `extracted-feature-${packManifest.name}`;
+                }
         // Canonicalize frameworks
         if (packManifest.requirements.frameworks) {
           packManifest.requirements.frameworks = packManifest.requirements.frameworks.map((f: string) => f.toLowerCase().replace(/\.js$/, ''));
@@ -253,6 +301,21 @@ class HybridAgent implements PLGNAgent {
 
       // Read manifest again for security scan
       let manifest = await readJson(manifestPath) as PackManifest;
+      if (!manifest.requirements) {
+        manifest.requirements = {
+          languages: ['any'],
+          frameworks: ['agnostic'],
+          minVersion: {}
+        };
+      } else {
+        manifest.requirements.languages = manifest.requirements.languages?.length
+          ? manifest.requirements.languages
+          : ['any'];
+        manifest.requirements.frameworks = manifest.requirements.frameworks?.length
+          ? manifest.requirements.frameworks
+          : ['agnostic'];
+        manifest.requirements.minVersion = manifest.requirements.minVersion ?? {};
+      }
       const vulns = await this.scanForVulns(codeSample, manifest.requirements.languages[0] || 'any');
       await writeJson(join(workspace, 'logs', 'security.json'), vulns, { spaces: 2 });
 
@@ -273,6 +336,8 @@ class HybridAgent implements PLGNAgent {
       return JSON.stringify({ success: true });
     });
 
+    const callTimeout = Math.max(timeoutMs ?? 120000, 30000);
+
     const withTimeout = async <T,>(p: Promise<T>, ms: number): Promise<T> => {
       return await Promise.race([
         p,
@@ -284,8 +349,8 @@ class HybridAgent implements PLGNAgent {
       emitEvent('heartbeat', { messages: conversation.length });
 
       const response = await withTimeout(
-        this.callLLM('', '', undefined, tools),
-        timeoutMs || 60000
+        this.callLLM(systemPrompt, initialUserPrompt, undefined, tools, conversation),
+        callTimeout
       );
 
       const message = response.choices[0].message;
@@ -337,10 +402,6 @@ class HybridAgent implements PLGNAgent {
         }
       }
 
-      if (timeoutMs && Date.now() > timeoutMs) {
-        emitEvent('error', { reason: 'Overall timeout' });
-        break;
-      }
     }
 
     if (!finalPack) {
@@ -440,6 +501,7 @@ Respond with JSON only (no markdown):
       analysisPrompt,
       0.1
     );
+    const analysisContent = this.extractMessageContent(analysisResult);
     console.log('AI analysis complete.');
     await this.logProgress('AI analysis complete');
 
@@ -452,8 +514,10 @@ Respond with JSON only (no markdown):
     };
 
     try {
-      const parsed = JSON.parse(analysisResult.trim());
-      metadata = { ...metadata, ...parsed };
+      if (analysisContent) {
+        const parsed = JSON.parse(analysisContent);
+        metadata = { ...metadata, ...parsed };
+      }
     } catch (e) {
       // Use defaults if parsing fails
     }
@@ -564,9 +628,13 @@ Generate adapted code that follows the target project's patterns. Respond with J
 }`;
 
     const adaptResult = await this.callLLM(this.systemPrompt, adaptPrompt, 0.3);
+    const adaptContent = this.extractMessageContent(adaptResult);
 
     try {
-      const parsed = JSON.parse(adaptResult.trim());
+      if (!adaptContent) {
+        throw new Error('Empty adaptation response');
+      }
+      const parsed = JSON.parse(adaptContent);
       const changeSet: ChangeSet = {
         items: parsed.files || [],
         summary: parsed.summary || `Adapted ${pack.manifest.name}`,
@@ -653,9 +721,13 @@ Handle edge cases, security, and performance. Respond with JSON only:
 }`;
 
     const implementResult = await this.callLLM(this.systemPrompt, implementPrompt, 0.4);
+    const implementContent = this.extractMessageContent(implementResult);
 
     try {
-      const parsed = JSON.parse(implementResult.trim());
+      if (!implementContent) {
+        throw new Error('Empty implementation response');
+      }
+      const parsed = JSON.parse(implementContent);
       const implemented: ImplementedCode = {
         files: parsed.files || [],
         tests: parsed.tests || [],
@@ -736,8 +808,8 @@ Respond with JSON only:
         vulnPrompt,
         0.1
       );
-
-      const parsed = JSON.parse(scanResult.trim());
+      const scanContent = this.extractMessageContent(scanResult);
+      const parsed = scanContent ? JSON.parse(scanContent) : { findings: [] };
       return {
         scanner: this.defaults.securityScanner,
         findings: parsed.findings || []
@@ -793,8 +865,11 @@ Respond with JSON only:
         planPrompt,
         0.2
       );
-
-      const parsed = JSON.parse(planResult.trim());
+      const planContent = this.extractMessageContent(planResult);
+      if (!planContent) {
+        throw new Error('Empty plan response');
+      }
+      const parsed = JSON.parse(planContent);
       return {
         description: parsed.description || `Plan for ${pack.manifest.name}`,
         steps: parsed.steps || [],

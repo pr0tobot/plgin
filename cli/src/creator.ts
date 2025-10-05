@@ -1,6 +1,6 @@
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import fsExtra from 'fs-extra';
-const { ensureDir, pathExists, copy, writeJson } = fsExtra;
+const { ensureDir, pathExists, copy, writeJson, readJson } = fsExtra;
 import {
   dedupe,
   detectLanguageFromPath,
@@ -11,8 +11,151 @@ import type {
   CreatePackResult,
   Pack,
   PackManifest,
-  PackImplementationPlan
+  PackImplementationPlan,
+  ToolDefinition
 } from './types.js';
+
+
+const AGENTIC_TOOLS: ToolDefinition[] = [
+  {
+    type: 'function',
+    function: {
+      name: 'list_files',
+      description: 'List files within a directory relative to the workspace.',
+      parameters: {
+        type: 'object',
+        properties: {
+          relative_dir: {
+            type: 'string',
+            description: 'Directory relative to the workspace to inspect.'
+          }
+        },
+        required: []
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'read_file',
+      description: 'Read a file from the workspace to understand existing content.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Relative path to the file inside the workspace.' }
+        },
+        required: ['path']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'detect_language',
+      description: 'Infer language from a file path to organize code correctly.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'File path to analyze.' }
+        },
+        required: ['path']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'ensure_dir',
+      description: 'Create a directory within the workspace if it does not exist.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Directory path to ensure inside the workspace.' }
+        },
+        required: ['path']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'write_file',
+      description: 'Create or overwrite a file inside the workspace.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Destination file path relative to the workspace.' },
+          content: { type: 'string', description: 'UTF-8 file contents to write.' }
+        },
+        required: ['path', 'content']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'write_manifest',
+      description: 'Persist a complete manifest.json for the pack.',
+      parameters: {
+        type: 'object',
+        properties: {
+          manifest: {
+            type: 'object',
+            description: 'Full manifest object to write to manifest.json.'
+          }
+        },
+        required: ['manifest']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'copy_tree',
+      description: 'Copy a directory or file tree from the project into the workspace.',
+      parameters: {
+        type: 'object',
+        properties: {
+          source: {
+            type: 'string',
+            description: 'Path relative to the current working directory to copy from.'
+          },
+          dest: {
+            type: 'string',
+            description: 'Destination directory relative to the workspace.'
+          }
+        },
+        required: ['source', 'dest']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'log_progress',
+      description: 'Write a progress update to the pack logs.',
+      parameters: {
+        type: 'object',
+        properties: {
+          message: { type: 'string', description: 'Progress message to append to logs.' }
+        },
+        required: ['message']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'finalize_pack',
+      description: 'Signal that the pack is ready. Triggers normalization and security scan.',
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: []
+      }
+    }
+  }
+];
 
 
 export async function createPackFromSource(params: CreatePackParams): Promise<CreatePackResult> {
@@ -61,6 +204,50 @@ export async function createPackFromSource(params: CreatePackParams): Promise<Cr
 
   await writeJson(join(baseDir, 'manifest.json'), initialManifest, { spaces: 2 });
   await writeText(join(baseDir, 'logs', 'create.log'), `[${new Date().toISOString()}] Pack creation started\n`);
+
+  if (params.request.agentic) {
+    const agenticPrompt = [
+      `Extract the feature "${params.request.featureName}" from the project path "${sourcePath}".`,
+      `Use the available tools to inspect the code, copy relevant assets into the workspace (${baseDir}), and build a production-ready PLGN pack.`,
+      'Requirements:',
+      '1. Mirror all needed implementation files under source/<language>/ preserving structure (use copy_tree or write_file).',
+      '2. Generate a rich manifest with description, dependencies, frameworks, provides.feature, and modularBreakdown derived from the code (use write_manifest).',
+      '3. Populate patterns/*.json with real conventions and dependency insights (avoid placeholders).',
+      '4. Populate agents/ prompts and variations with actionable guidance for adapting this feature.',
+      '5. Create meaningful tests in tests/ that exercise the feature behaviour.',
+      '6. Log major milestones with log_progress and call finalize_pack when the pack is complete.',
+      'Note: list_files operates inside the workspace. Use copy_tree with project-relative paths (e.g., "src/data") to import code before inspecting it with read_file or detect_language.',
+      `Set manifest.name to "${normalizedName}" and ensure ai_adaptation.agent_model reflects ${params.agent.defaults.model}.`,
+      `Work from the source path: ${sourcePath}.`
+    ].join('\n');
+
+    const agenticPack = await params.agent.runToolLoop({
+      systemPrompt: params.agent.systemPrompt,
+      initialUserPrompt: agenticPrompt,
+      tools: AGENTIC_TOOLS,
+      workspace: baseDir,
+      verbose: Boolean(params.request.verbose),
+      timeoutMs: params.request.timeoutMs
+    });
+
+    const manifestPath = join(baseDir, 'manifest.json');
+    let manifest: PackManifest = agenticPack.manifest;
+    if (await pathExists(manifestPath)) {
+      try {
+        manifest = await readJson(manifestPath) as PackManifest;
+      } catch {
+        // fall back to agenticPack.manifest
+      }
+    }
+
+    manifest.name = normalizedName;
+    await writeJson(manifestPath, manifest, { spaces: 2 });
+
+    return {
+      path: baseDir,
+      manifest
+    };
+  }
 
   const pack = await params.agent.extractFeature(
     sourcePath,

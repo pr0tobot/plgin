@@ -1,4 +1,7 @@
 #!/usr/bin/env node
+
+import dotenv from 'dotenv';
+dotenv.config({ path: '.env.local' });
 import { basename } from 'node:path';
 import { Command, Option } from 'commander';
 import chalk from 'chalk';
@@ -26,7 +29,7 @@ const program = new Command();
 program
   .name('plgn')
   .description('PLGN hybrid feature pack CLI (language agnostic)')
-  .version('0.1.0');
+  .version('1.5.0');
 
 function handleError(err: unknown): void {
   const message = err instanceof Error ? err.message : String(err);
