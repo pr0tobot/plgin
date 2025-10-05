@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.0.4] - 2025-10-05
+
+### Fixed
+- Similarity check 500 error during publish by implementing robust Jaccard similarity fallback (no external embeddings required)
+- Improved CLI error handling to parse and display JSON error details from proxy responses
+
 ## [2.0.3] - 2025-10-05
 
 ### Added

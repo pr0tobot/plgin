@@ -342,7 +342,14 @@ async function checkSimilarity(manifest: PackManifest): Promise<{ similar: boole
     });
 
     if (!response.ok) {
-      console.warn(`Similarity check failed (${response.status}): ${response.statusText}. Proceeding with publish.`);
+      let errorDetail = response.statusText;
+      try {
+        const errorData = await response.json();
+        errorDetail = errorData.detail || errorDetail;
+      } catch {
+        // Ignore JSON parse error
+      }
+      console.warn(`Similarity check failed (${response.status}): ${errorDetail}. Proceeding with publish.`);
       return { similar: false, maxScore: 0 };
     }
 
