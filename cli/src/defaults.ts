@@ -19,14 +19,14 @@ export const ORG_DEFAULTS = {
    * Rate-limited: 100 req/hr for reads, 10 req/hr for publishes
    * Deployed via: modal deploy proxy/main.py
    */
-  REGISTRY_PROXY_URL: process.env.PLGN_REGISTRY_URL || 'https://pr0tobot--plgn-registry-proxy-proxy-app.modal.run',
+  REGISTRY_PROXY_URL: process.env.PLGIN_REGISTRY_URL || 'https://pr0tobot--plgn-registry-proxy-proxy-app.modal.run',
 
   /**
    * Public proxy API for semantic search
    * This endpoint proxies requests to Nia with org credentials server-side
    * Uses same Modal endpoint as registry
    */
-  SEMANTIC_PROXY_URL: process.env.PLGN_SEMANTIC_URL || 'https://pr0tobot--plgn-registry-proxy-proxy-app.modal.run',
+  SEMANTIC_PROXY_URL: process.env.PLGIN_SEMANTIC_URL || 'https://pr0tobot--plgn-registry-proxy-proxy-app.modal.run',
 
   /**
    * Fallback: direct GitHub API (deprecated, proxy handles all operations)

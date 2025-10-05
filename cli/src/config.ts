@@ -7,7 +7,7 @@ import { z } from 'zod';
 import type { ConfigFile, PLGNDefaults, Provider, SemanticConfig } from './types.js';
 
 const CONFIG_FILENAME = 'config.json';
-const CONFIG_DIR = join(homedir(), '.plgn');
+const CONFIG_DIR = join(homedir(), '.plgin');
 const CONFIG_PATH = join(CONFIG_DIR, CONFIG_FILENAME);
 const CACHE_DIR = join(CONFIG_DIR, 'cache');
 
@@ -25,13 +25,13 @@ const preferencesSchema = z.object({
 
 const semanticSchema = z.object({
   provider: z.enum(['nia-contexts', 'disabled']).default('nia-contexts'),
-  agentSource: z.string().min(1).default('plgn-cli'),
-  tags: z.array(z.string()).default(['plgn-pack']),
+  agentSource: z.string().min(1).default('plgin-cli'),
+  tags: z.array(z.string()).default(['plgin-pack']),
   searchLimit: z.number().int().min(1).max(100).default(20)
 }).default({
   provider: 'nia-contexts',
-  agentSource: 'plgn-cli',
-  tags: ['plgn-pack'],
+  agentSource: 'plgin-cli',
+  tags: ['plgin-pack'],
   searchLimit: 20
 });
 
@@ -66,14 +66,14 @@ const DEFAULT_CONFIG: ConfigFile = {
   registry: {},
   semantic: {
     provider: 'nia-contexts',
-    agentSource: 'plgn-cli',
-    tags: ['plgn-pack'],
+    agentSource: 'plgin-cli',
+    tags: ['plgin-pack'],
     searchLimit: 20
   }
 };
 
 function resolveOverrideCacheDir(cwd: string): string | undefined {
-  const override = process.env.PLGN_CACHE_DIR;
+  const override = process.env.PLGIN_CACHE_DIR;
   if (!override) {
     return undefined;
   }
@@ -92,10 +92,10 @@ function resolveCacheDir(cwd: string): string {
     return override;
   }
 
-  const workspaceRoot = join(cwd, '.plgn');
+  const workspaceRoot = join(cwd, '.plgin');
   const workspaceCacheDir = join(workspaceRoot, 'cache');
-  const workspaceOptIn = process.env.PLGN_CACHE_STRATEGY === 'workspace'
-    || process.env.PLGN_CACHE_STRATEGY === 'project'
+  const workspaceOptIn = process.env.PLGIN_CACHE_STRATEGY === 'workspace'
+    || process.env.PLGIN_CACHE_STRATEGY === 'project'
     || existsSync(workspaceRoot);
 
   if (workspaceOptIn) {
@@ -118,7 +118,7 @@ function resolveCacheDir(cwd: string): string {
 export const getEnv = () => {
   const cwd = process.cwd();
   const cacheDir = resolveCacheDir(cwd);
-  process.env.PLGN_ACTIVE_CACHE_DIR = cacheDir;
+  process.env.PLGIN_ACTIVE_CACHE_DIR = cacheDir;
   return {
     cwd,
     configPath: CONFIG_PATH,
@@ -157,7 +157,7 @@ export function mergeDefaults(current: ConfigFile, overrides: Partial<PLGNDefaul
 }
 
 export function resolveToken(config: ConfigFile, provider: Provider): string | undefined {
-  const envKey = `PLGN_${provider.toUpperCase()}_API_KEY`;
+  const envKey = `PLGIN_${provider.toUpperCase()}_API_KEY`;
   const providerEnvKey = `${provider.toUpperCase()}_API_KEY`;
   return process.env[envKey] ?? process.env[providerEnvKey] ?? config.tokens[provider];
 }

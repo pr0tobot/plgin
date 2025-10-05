@@ -177,7 +177,7 @@ export async function createPackFromSource(params: CreatePackParams): Promise<Cr
   await ensureDir(join(baseDir, 'logs'));
   await ensureDir(join(baseDir, 'source'));
   // Expose workspace path for agent logs
-  process.env.PLGN_PACK_DIR = baseDir;
+  process.env.PLGIN_PACK_DIR = baseDir;
 
   const initialManifest: PackManifest = {
     name: normalizedName,
@@ -390,7 +390,7 @@ async function materializePack(pack: Pack, options: {
 
   await ensureDir(join(baseDir, 'source'));
   // Expose workspace path for agent logs
-  process.env.PLGN_PACK_DIR = baseDir;
+  process.env.PLGIN_PACK_DIR = baseDir;
   const sourcePathMap = new Map<string, string>();
   for (const file of pack.sourcePaths) {
     const language = detectLanguageFromPath(file) || 'misc';
@@ -498,7 +498,7 @@ function sanitizeName(name: string): string {
     .replace(/[^a-z0-9-]+/g, '-')
     .replace(/-+/g, '-')
     .replace(/^-|-$/g, '')
-    || 'plgn-pack';
+    || 'plgin-pack';
 }
 
 function normalizePath(path: string): string {

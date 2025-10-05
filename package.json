@@ -1,22 +1,27 @@
 {
-  "name": "@pr0tobot/plgn",
-  "version": "1.9.1",
-  "description": "PLGN: Hybrid Feature Pack System - Bidirectional Feature Integration with AI + Deterministic Code (Language-Agnostic Edition)",
+  "name": "@pr0tobot/plgin",
+  "version": "2.0.0",
+  "description": "Semantic feature extraction and code integration using vector embeddings - language-agnostic CLI tool",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/pr0tobot/plgn.git"
+    "url": "git+https://github.com/pr0tobot/plgin.git"
   },
-  "homepage": "https://github.com/pr0tobot/plgn",
+  "homepage": "https://github.com/pr0tobot/plgin",
   "bugs": {
-    "url": "https://github.com/pr0tobot/plgn/issues"
+    "url": "https://github.com/pr0tobot/plgin/issues"
   },
   "keywords": [
-    "ai",
+    "semantic-search",
+    "embeddings",
+    "vector-search",
     "code-generation",
-    "feature-packs",
+    "feature-extraction",
     "language-agnostic",
-    "cli"
+    "cli",
+    "code-reuse",
+    "developer-tools",
+    "code-integration"
   ],
   "engines": {
     "node": ">=18"
@@ -32,7 +37,7 @@
   "private": false,
   "type": "module",
   "bin": {
-    "plgn": "dist/cli/src/index.js"
+    "plgin": "dist/cli/src/index.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

@@ -91,8 +91,8 @@ export class SemanticService {
     params.set('q', query);
     params.set('limit', String(this.semantic.searchLimit ?? 20));
 
-    const tags = new Set(this.semantic.tags ?? ['plgn-pack']);
-    tags.add('plgn-pack');
+    const tags = new Set(this.semantic.tags ?? ['plgin-pack']);
+    tags.add('plgin-pack');
     if (language && language !== 'any') {
       tags.add(`language:${language.toLowerCase()}`);
     }
@@ -224,8 +224,8 @@ export class SemanticService {
     const languages = manifest.requirements?.languages ?? ['any'];
     const frameworks = manifest.requirements?.frameworks ?? [];
     const providesKeys = Object.keys(manifest.provides ?? {});
-    const tags = new Set<string>(this.semantic.tags ?? ['plgn-pack']);
-    tags.add('plgn-pack');
+    const tags = new Set<string>(this.semantic.tags ?? ['plgin-pack']);
+    tags.add('plgin-pack');
     tags.add(`pack:${manifest.name}`);
     tags.add(`version:${manifest.version}`);
     for (const language of languages) {
@@ -264,7 +264,7 @@ export class SemanticService {
       summary,
       content,
       tags: Array.from(tags),
-      agent_source: this.semantic.agentSource ?? 'plgn-cli',
+      agent_source: this.semantic.agentSource ?? 'plgin-cli',
       metadata: {
         packName: manifest.name,
         version: manifest.version,

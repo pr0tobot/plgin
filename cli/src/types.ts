@@ -40,6 +40,15 @@ export interface PackManifest {
     findings: number;
     critical: number;
   };
+  semantic_tags?: {
+    architecture?: string[];
+    patterns?: string[];
+    ui_ux?: string[];
+    components?: string[];
+    dependencies?: string[];
+    conventions?: string[];
+    features?: string[];
+  };
 }
 
 export interface Pack {

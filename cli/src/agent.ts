@@ -32,7 +32,7 @@ import type {
   IntegrationToolLoopOptions
 } from './types.js';
 
-const IGNORED_DIRECTORY_SEGMENTS = new Set(['node_modules', '.git', '.plgn', 'dist', 'build', '.next', '.turbo']);
+const IGNORED_DIRECTORY_SEGMENTS = new Set(['node_modules', '.git', '.plgin', 'dist', 'build', '.next', '.turbo']);
 const DEP_PARSE_EXTS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs']);
 const DEP_CANDIDATE_EXTS = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.json', '.css', '.scss', '.sass', '.less', '.md', '.mdx', '.svg', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico'];
 const MAX_DEPENDENCY_EXPANSION = 250;
@@ -41,7 +41,7 @@ const DEFAULT_SNIPPET_CHARS = 8000;
 const FAST_SNIPPET_LIMIT = 12;
 const DEFAULT_SNIPPET_LIMIT = 40;
 
-export const PLGN_SYSTEM_PROMPT = `You are PLGN, an expert feature extraction and integration agent for any programming language.
+export const PLGIN_SYSTEM_PROMPT = `You are PLGN, an expert feature extraction and integration agent for any programming language.
 
 Your core capabilities:
 1. EXTRACT: Analyze code in any language and extract reusable features with dependencies.
@@ -65,7 +65,7 @@ IMPORTANT: Always return valid JSON when asked. Never add markdown formatting or
 
 class HybridAgent implements PLGNAgent {
   readonly defaults;
-  readonly systemPrompt = PLGN_SYSTEM_PROMPT;
+  readonly systemPrompt = PLGIN_SYSTEM_PROMPT;
   private readonly cacheDir: string;
   private readonly providerToken?: string;
   private readonly client: OpenAI;
@@ -146,16 +146,42 @@ class HybridAgent implements PLGNAgent {
 
       const response = await this.client.chat.completions.create(params);
 
+      // Validate response structure
+      if (!response || !response.choices || response.choices.length === 0) {
+        throw new Error('Empty or invalid response from AI provider');
+      }
+
       return response;
     } catch (error) {
       console.error('LLM call failed:', error);
-      throw new Error(`AI provider error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+
+      // Provide helpful context for common errors
+      if (errorMsg.includes('401') || errorMsg.includes('auth')) {
+        throw new Error(`Authentication error: Please ensure OPENROUTER_API_KEY is set in your environment (.env or .env.local file)`);
+      } else if (errorMsg.includes('JSON')) {
+        throw new Error(`AI provider returned malformed response. This may be a temporary issue - please try again.`);
+      }
+
+      throw new Error(`AI provider error: ${errorMsg}`);
     }
   }
 
   private extractMessageContent(response: any): string {
     const content = response?.choices?.[0]?.message?.content;
     return typeof content === 'string' ? content.trim() : '';
+  }
+
+  private safeJSONParse(content: string, fallback: any = {}): any {
+    if (!content || content.trim().length === 0) {
+      return fallback;
+    }
+    try {
+      return JSON.parse(content);
+    } catch (error) {
+      console.warn('JSON parse failed, using fallback:', error instanceof Error ? error.message : 'Unknown error');
+      return fallback;
+    }
   }
 
   async runToolLoop(options: RunToolLoopOptions): Promise<Pack> {
@@ -479,8 +505,8 @@ class HybridAgent implements PLGNAgent {
 
     const resolvedProjectRoot = resolve(projectRoot);
     const packRoot = resolve(pack.rootDir);
-    if (!process.env.PLGN_PROJECT_DIR) {
-      process.env.PLGN_PROJECT_DIR = resolvedProjectRoot;
+    if (!process.env.PLGIN_PROJECT_DIR) {
+      process.env.PLGIN_PROJECT_DIR = resolvedProjectRoot;
     }
 
     const messages: any[] = [
@@ -853,7 +879,7 @@ class HybridAgent implements PLGNAgent {
   }
 
   private async logProgress(message: string): Promise<void> {
-    const packDir = process.env.PLGN_PACK_DIR;
+    const packDir = process.env.PLGIN_PACK_DIR;
     if (!packDir) return;
     try {
       await ensureDir(join(packDir, 'logs'));
@@ -865,10 +891,10 @@ class HybridAgent implements PLGNAgent {
   }
 
   private async logIntegrationProgress(message: string): Promise<void> {
-    const projectDir = process.env.PLGN_PROJECT_DIR;
+    const projectDir = process.env.PLGIN_PROJECT_DIR;
     if (!projectDir) return;
     try {
-      const logsDir = join(projectDir, '.plgn', 'logs');
+      const logsDir = join(projectDir, '.plgin', 'logs');
       await ensureDir(logsDir);
       const line = `[${new Date().toISOString()}] ${message}`;
       await appendFile(join(logsDir, 'integration.log'), line + '\n', 'utf8');
@@ -1638,7 +1664,7 @@ __all__ = ['${this.toPascalCase(pack.manifest.name)}']
       java: `// ${pack.manifest.name}
 // ${pack.manifest.description}
 
-package com.plgn.${pack.manifest.name.toLowerCase()};
+package com.plgin.${pack.manifest.name.toLowerCase()};
 
 public class ${this.toPascalCase(pack.manifest.name)} {
     private boolean initialized;

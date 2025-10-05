@@ -38,8 +38,8 @@ const repoRoot = resolve(cliRoot, '..');
 const ENV_SEARCH_ORDER = [
   resolve(process.cwd(), '.env.local'),
   resolve(process.cwd(), '.env'),
-  resolve(process.cwd(), '.plgn', '.env.local'),
-  resolve(process.cwd(), '.plgn', '.env'),
+  resolve(process.cwd(), '.plgin', '.env.local'),
+  resolve(process.cwd(), '.plgin', '.env'),
   resolve(cliRoot, '.env.local'),
   resolve(cliRoot, '.env'),
   resolve(repoRoot, '.env.local'),
@@ -50,7 +50,7 @@ const { ensureDirSync } = fsExtra;
 
 function loadEnvironment(): void {
   try {
-    ensureDirSync(resolve(process.cwd(), '.plgn'));
+    ensureDirSync(resolve(process.cwd(), '.plgin'));
   } catch {
     // best-effort workspace scaffolding
   }
@@ -71,9 +71,9 @@ loadEnvironment();
 
 const program = new Command();
 program
-  .name('plgn')
-  .description('PLGN hybrid feature pack CLI (language agnostic)')
-  .version('1.9.1');
+  .name('plgin')
+  .description('Semantic feature extraction and integration across any programming language')
+  .version('2.0.0');
 
 function handleError(err: unknown): void {
   const message = err instanceof Error ? err.message : String(err);
@@ -103,7 +103,7 @@ async function promptYesNo(message: string, defaultValue = false): Promise<boole
 
 program
   .command('config')
-  .description('Update PLGN defaults and tokens')
+  .description('Update plgin defaults and tokens')
   .addOption(new Option('--provider <provider>', 'select provider').choices(['openrouter', 'xai', 'anthropic', 'custom']))
   .option('--model <model>', 'set default model')
   .option('--temperature <value>', 'set default temperature', (value) => parseFloat(value))
@@ -177,14 +177,14 @@ program
 
 program
   .command('create [input]')
-  .description('Create a PLGN pack from code path, prompt, or infer from current directory')
+  .description('Create a plgin pack from code path, prompt, or infer from current directory')
   .option('--name <name>', 'pack name to use in manifest')
   .option('--lang <language>', 'hint for language extraction')
   .option('--agentic', 'enable agentic mode for extraction (default for prompts)')
   .option('--out-dir <path>', 'where to output the new pack', 'packs')
   .option('--verbose', 'enable verbose agent logs')
   .option('--timeout <ms>', 'overall timeout in milliseconds', (value) => parseInt(value))
-  .option('--fast', 'favor speed with semantic hints and fewer agent iterations')
+  .option('--detailed', 'use comprehensive analysis (slower, more thorough)')
   .option('--examples <policy>', 'extra examples policy (none|auto|csv)', 'none')
   .action(async (input: string | undefined, flags) => {
     let spinner = ora('Extracting feature...').start();
@@ -223,6 +223,9 @@ program
       let isPrompt = false;
       let sourcePath: string | undefined;
 
+      // Fast mode is now the default, detailed flag disables it
+      const fastMode = !Boolean(flags.detailed);
+
       if (!input) {
         // Infer from current directory
         sourcePath = process.cwd();
@@ -235,7 +238,7 @@ program
           verbose: Boolean(flags.verbose),
           timeoutMs,
           examples: flags.examples,
-          fast: Boolean(flags.fast)
+          fast: fastMode
         };
       } else if (input.startsWith('./') || input.startsWith('/') || input.includes('/')) {
         // Treat as path
@@ -249,7 +252,7 @@ program
           verbose: Boolean(flags.verbose),
           timeoutMs,
           examples: flags.examples,
-          fast: Boolean(flags.fast)
+          fast: fastMode
         };
       } else {
         // Treat as prompt
@@ -263,7 +266,7 @@ program
           verbose: Boolean(flags.verbose),
           timeoutMs,
           examples: flags.examples,
-          fast: Boolean(flags.fast)
+          fast: fastMode
         };
       }
 
@@ -392,7 +395,7 @@ program
   .option('--agentic', 'force agentic integration path')
   .option('--lang <language>', 'target language override')
   .option('--verbose', 'enable verbose integration logs')
-  .option('--fast', 'favor speed with semantic hints and fewer agent iterations')
+  .option('--detailed', 'use comprehensive analysis (slower, more thorough)')
   .action(async (packRef: string, flags) => {
     try {
       const config = await loadConfig();
@@ -408,6 +411,8 @@ program
         cacheDir: env.cacheDir
       });
       const spinner = ora('Integrating pack...').start();
+      // Fast mode is now the default, detailed flag disables it
+      const fastMode = !Boolean(flags.detailed);
       const result = await integratePack({
         agent,
         packRef,
@@ -417,7 +422,7 @@ program
         targetLanguage: flags.lang ?? config.defaults.language,
         verbose,
         semanticProvider: semantic,
-        fast: Boolean(flags.fast)
+        fast: fastMode
       });
       spinner.stop();
       console.log(chalk.green(`Integration prepared with confidence ${(result.changeSet.confidence * 100).toFixed(1)}%`));
@@ -531,13 +536,13 @@ program
 
 program
   .command('status')
-  .description('Show PLGN workspace status')
+  .description('Show plgin workspace status')
   .action(async () => {
     try {
       const env = getEnv();
       const config = await loadConfig();
 
-      console.log(chalk.cyan('PLGN Status'));
+      console.log(chalk.cyan('plgin Status'));
       console.log(`Cache dir: ${env.cacheDir}`);
       console.log(`Config: ${env.configPath}`);
       console.log(`Provider: ${config.defaults.provider}`);
@@ -570,7 +575,7 @@ program
 
 program
   .command('clean')
-  .description('Clean PLGN cache and preview directories')
+  .description('Clean plgin cache and preview directories')
   .option('--cache', 'clean cache only')
   .option('--previews', 'clean previews only')
   .action(async (flags) => {
@@ -610,7 +615,7 @@ program
 
 program
   .hook('preAction', () => {
-    process.env.PLGN_ENV = 'cli';
+    process.env.PLGIN_ENV = 'cli';
   });
 
 program

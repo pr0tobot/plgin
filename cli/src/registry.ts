@@ -18,7 +18,7 @@ import type {
   PublishResult
 } from './types.js';
 
-const LOCAL_REGISTRY_PATH = join(process.cwd(), '.plgn', 'registry.json');
+const LOCAL_REGISTRY_PATH = join(process.cwd(), '.plgin', 'registry.json');
 
 function resolveGitHubToken(): string | undefined {
   return process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
@@ -52,7 +52,7 @@ async function discoverFromGitHub(
   token: string,
   org: string
 ): Promise<RegistryPackSummary[]> {
-  const cacheDir = process.env.PLGN_ACTIVE_CACHE_DIR || join(process.cwd(), '.plgn', 'cache');
+  const cacheDir = process.env.PLGIN_ACTIVE_CACHE_DIR || join(process.cwd(), '.plgin', 'cache');
   const cacheFile = join(cacheDir, `registry-${Date.now()}.json`);
 
   const proxyUrl = getRegistryEndpoint();
@@ -69,7 +69,7 @@ async function discoverFromGitHub(
 async function fetchRegistryFromProxy(proxyUrl: string): Promise<RegistryEntry[]> {
   const response = await fetch(`${proxyUrl}/registry/index`, {
     headers: {
-      'User-Agent': 'plgn-cli/1.9.1'
+      'User-Agent': 'plgin-cli/2.0.0'
     }
   });
 
@@ -121,7 +121,7 @@ export async function publishPack(params: PublishPackParams): Promise<PublishRes
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'User-Agent': 'plgn-cli/1.9.1'
+      'User-Agent': 'plgin-cli/1.9.1'
     },
     body: JSON.stringify({
       name: manifest.name,
@@ -149,7 +149,7 @@ export async function publishPack(params: PublishPackParams): Promise<PublishRes
   const proxyReadUrl = getRegistryEndpoint();
   const registryResponse = await fetch(`${proxyReadUrl}/registry/index`, {
     headers: {
-      'User-Agent': 'plgn-cli/1.9.1'
+      'User-Agent': 'plgin-cli/1.9.1'
     }
   });
 
@@ -223,7 +223,7 @@ async function queryLocalRegistry(): Promise<RegistryPackSummary[]> {
 }
 
 async function persistLocalRegistry(entries: RegistryPackSummary[]): Promise<void> {
-  await ensureDir(join(process.cwd(), '.plgn'));
+  await ensureDir(join(process.cwd(), '.plgin'));
   await writeJson(LOCAL_REGISTRY_PATH, entries, { spaces: 2 });
 }
 

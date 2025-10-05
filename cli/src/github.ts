@@ -20,7 +20,7 @@ export class GitHubClient {
     try {
       const { data } = await this.octokit.repos.getContent({
         owner: this.org,
-        repo: 'plgn-registry',
+        repo: 'plgin-registry',
         path: 'registry.json'
       });
 
@@ -45,14 +45,14 @@ export class GitHubClient {
     try {
       const { data: existingFile } = await this.octokit.repos.getContent({
         owner: this.org,
-        repo: 'plgn-registry',
+        repo: 'plgin-registry',
         path
       });
 
       if ('sha' in existingFile) {
         await this.octokit.repos.createOrUpdateFileContents({
           owner: this.org,
-          repo: 'plgn-registry',
+          repo: 'plgin-registry',
           path,
           message,
           content: Buffer.from(content).toString('base64'),
@@ -63,7 +63,7 @@ export class GitHubClient {
       if (error.status === 404) {
         await this.octokit.repos.createOrUpdateFileContents({
           owner: this.org,
-          repo: 'plgn-registry',
+          repo: 'plgin-registry',
           path,
           message,
           content: Buffer.from(content).toString('base64')
@@ -79,7 +79,7 @@ export class GitHubClient {
 
     const { data: release } = await this.octokit.repos.createRelease({
       owner: this.org,
-      repo: 'plgn-registry',
+      repo: 'plgin-registry',
       tag_name: tagName,
       name: `${name} v${version}`,
       body: `Pack release for ${name} v${version}\n\nChecksum (SHA256): \`${checksum}\``
@@ -93,7 +93,7 @@ export class GitHubClient {
 
     const { data: asset } = await this.octokit.repos.uploadReleaseAsset({
       owner: this.org,
-      repo: 'plgn-registry',
+      repo: 'plgin-registry',
       release_id: releaseId,
       name: filename,
       data: tarballBuffer as any
@@ -106,13 +106,13 @@ export class GitHubClient {
     try {
       await this.octokit.repos.get({
         owner: this.org,
-        repo: 'plgn-registry'
+        repo: 'plgin-registry'
       });
     } catch (error: any) {
       if (error.status === 404) {
         await this.octokit.repos.createInOrg({
           org: this.org,
-          name: 'plgn-registry',
+          name: 'plgin-registry',
           description: 'PLGN pack registry',
           auto_init: true,
           private: false

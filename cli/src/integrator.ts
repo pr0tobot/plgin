@@ -25,10 +25,10 @@ export async function checkCompatibility(options: CompatibilityOptions): Promise
 }
 
 function resolveActiveCacheDir(): string {
-  if (process.env.PLGN_ACTIVE_CACHE_DIR) {
-    return process.env.PLGN_ACTIVE_CACHE_DIR;
+  if (process.env.PLGIN_ACTIVE_CACHE_DIR) {
+    return process.env.PLGIN_ACTIVE_CACHE_DIR;
   }
-  return join(process.cwd(), '.plgn', 'cache');
+  return join(process.cwd(), '.plgin', 'cache');
 }
 
 const INTEGRATION_TOOLS: ToolDefinition[] = [

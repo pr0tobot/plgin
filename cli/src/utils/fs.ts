@@ -2,7 +2,7 @@ import fsExtra from 'fs-extra';
 const { readdir, readFile, writeFile, stat, mkdirp } = fsExtra;
 import { join, extname, dirname } from 'node:path';
 
-const DEFAULT_IGNORES = new Set(['node_modules', '.git', '.plgn', 'dist', 'build', '.next', '.turbo']);
+const DEFAULT_IGNORES = new Set(['node_modules', '.git', '.plgin', 'dist', 'build', '.next', '.turbo']);
 
 const LANGUAGE_MAP: Record<string, string> = {
   '.ts': 'typescript',
