@@ -30,28 +30,22 @@ function resolveGitHubOrg(): string {
 }
 
 export async function discoverPacks(options: DiscoveryOptions, config: ConfigFile): Promise<RegistryPackSummary[]> {
-  const token = resolveGitHubToken();
-  const org = resolveGitHubOrg();
   const env = getEnv();
   const semantic = createSemanticService(config, env.cacheDir);
 
-  if (token && org) {
-    try {
-      return await discoverFromGitHub(options, config, semantic, token, org);
-    } catch (error: any) {
-      console.warn(`GitHub discovery failed (${error.message}), falling back to local registry`);
-    }
+  // Always use proxy for discovery (no GitHub token needed)
+  try {
+    return await discoverFromProxy(options, config, semantic);
+  } catch (error: any) {
+    console.warn(`Registry discovery failed (${error.message}), falling back to local cache`);
+    return await discoverFromLocal(options, config, semantic);
   }
-
-  return await discoverFromLocal(options, config, semantic);
 }
 
-async function discoverFromGitHub(
+async function discoverFromProxy(
   options: DiscoveryOptions,
   config: ConfigFile,
-  semantic: ReturnType<typeof createSemanticService>,
-  token: string,
-  org: string
+  semantic: ReturnType<typeof createSemanticService>
 ): Promise<RegistryPackSummary[]> {
   const cacheDir = process.env.PLGIN_ACTIVE_CACHE_DIR || join(process.cwd(), '.plgin', 'cache');
   const cacheFile = join(cacheDir, `registry-${Date.now()}.json`);
@@ -70,7 +64,7 @@ async function discoverFromGitHub(
 export async function fetchRegistryFromProxy(proxyUrl: string): Promise<RegistryEntry[]> {
   const response = await fetch(`${proxyUrl}/registry/index`, {
     headers: {
-      'User-Agent': 'plgin-cli/2.0.5'
+      'User-Agent': 'plgin-cli/2.0.6'
     }
   });
 
@@ -129,7 +123,7 @@ export async function publishPack(params: PublishPackParams): Promise<PublishRes
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'User-Agent': 'plgin-cli/2.0.5'
+      'User-Agent': 'plgin-cli/2.0.6'
     },
     body: JSON.stringify({
       name: manifest.name,
@@ -158,7 +152,7 @@ export async function publishPack(params: PublishPackParams): Promise<PublishRes
   const proxyReadUrl = getRegistryEndpoint();
   const registryResponse = await fetch(`${proxyReadUrl}/registry/index`, {
     headers: {
-      'User-Agent': 'plgin-cli/2.0.5'
+      'User-Agent': 'plgin-cli/2.0.6'
     }
   });
 
@@ -336,7 +330,7 @@ async function checkSimilarity(manifest: PackManifest): Promise<{ similar: boole
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'User-Agent': 'plgin-cli/2.0.5'
+        'User-Agent': 'plgin-cli/2.0.6'
       },
       body: JSON.stringify(payload)
     });

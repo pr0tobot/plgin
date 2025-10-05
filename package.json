@@ -1,6 +1,6 @@
 {
   "name": "plgin",
-  "version": "2.0.5",
+  "version": "2.0.6",
   "description": "Semantic feature extraction and code integration using vector embeddings - language-agnostic CLI tool",
   "license": "MIT",
   "repository": {

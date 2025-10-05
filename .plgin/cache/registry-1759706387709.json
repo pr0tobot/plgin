@@ -1,0 +1,62 @@
+{
+  "timestamp": 1759706389024,
+  "entries": [
+    {
+      "name": "hero-component",
+      "version": "0.1.0",
+      "languages": [
+        "typescript"
+      ],
+      "description": "A full-screen hero banner component with background image, gradient overlays, title, description, and call-to-action buttons.",
+      "downloadUrl": "https://github.com/PR0TO-IDE/plgin-registry/releases/download/hero-component-0.1.0/hero-component-0.1.0.tgz",
+      "checksum": "b5ed0761b8c5d5ae5787a4333ab3bce5da0b76984fdbde60caa3e56b00611b8f",
+      "publishedAt": "2025-10-05T21:50:14.289149Z",
+      "author": "community"
+    },
+    {
+      "name": "netflix-header",
+      "version": "0.1.0",
+      "languages": [
+        "typescript"
+      ],
+      "description": "A fixed header component with navigation menu and user action buttons for a streaming platform interface.",
+      "downloadUrl": "https://github.com/PR0TO-IDE/plgin-registry/releases/download/netflix-header-0.1.0/netflix-header-0.1.0.tgz",
+      "checksum": "a34aa4ef2cc4dfd0733ba059f4fd3da4b4ce45eb7af96678e3e29893f32fd337",
+      "publishedAt": "2025-10-05T22:29:38.042320Z",
+      "author": "community",
+      "semantic_tags": {
+        "architecture": [
+          "component-based",
+          "fixed positioning"
+        ],
+        "patterns": [
+          "responsive design",
+          "icon integration"
+        ],
+        "ui_ux": [
+          "header",
+          "navigation",
+          "interactive buttons",
+          "hover effects"
+        ],
+        "components": [
+          "Header",
+          "nav",
+          "button"
+        ],
+        "dependencies": [
+          "lucide-react icons"
+        ],
+        "conventions": [
+          "PascalCase component",
+          "Tailwind utility classes"
+        ],
+        "features": [
+          "responsive navigation",
+          "gradient background",
+          "icon-based actions"
+        ]
+      }
+    }
+  ]
+}
