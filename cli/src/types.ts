@@ -61,10 +61,32 @@ export interface ChangeSet {
   confidence: number;
 }
 
+export interface FileDiff {
+  path: string;
+  action: ChangeSetItem['action'];
+  language: string;
+  patch: string;
+  stats: {
+    additions: number;
+    deletions: number;
+  };
+  /**
+   * Optional pointer to a temp file containing the proposed contents.
+   * Useful for editor integrations or external diff tooling.
+   */
+  previewPath?: string;
+}
+
 export interface IntegrationResult {
   changeSet: ChangeSet;
   testsRun: boolean;
   vulnerabilities?: VulnReport;
+  diffs: FileDiff[];
+  /**
+   * Directory where preview artifacts (temp files, metadata) are stored.
+   * Consumers may clean up this directory after applying or discarding the change.
+   */
+  previewDir?: string;
 }
 
 export interface VulnReport {
@@ -97,10 +119,16 @@ export interface AgentTaskContext {
   dryRun?: boolean;
 }
 
+export interface ConfigPreferences {
+  autoApplyAdd: boolean;
+}
+
 export interface ConfigFile {
   defaults: PLGNDefaults;
   providerOptions: Record<string, unknown>;
   tokens: Record<string, string | undefined>;
+  preferences: ConfigPreferences;
+  registry: RegistryConfig;
 }
 
 export interface FeatureExtractionRequest {
@@ -148,6 +176,49 @@ export interface RegistryPackSummary {
   compatibilityScore?: number;
 }
 
+export interface RegistryEntry {
+  name: string;
+  version: string;
+  languages: string[];
+  description: string;
+  downloadUrl: string;
+  checksum: string;
+  publishedAt: string;
+  author: string;
+}
+
+export interface ValidationResult {
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+}
+
+export interface PublishResult {
+  url: string;
+  version: string;
+  checksum: string;
+}
+
+export interface ComplianceReport {
+  packName: string;
+  version: string;
+  timestamp: string;
+  validation: ValidationResult;
+  security?: VulnReport;
+  testsRun: boolean;
+  testResults?: {
+    passed: number;
+    failed: number;
+    output: string;
+  };
+}
+
+export interface RegistryConfig {
+  url?: string;
+  org?: string;
+  token?: string;
+}
+
 export interface CLIEnvironment {
   cwd: string;
   configPath: string;
@@ -180,6 +251,7 @@ export interface IntegratePackParams {
   dryRun: boolean;
   agentic: boolean;
   targetLanguage: string;
+  verbose?: boolean;
 }
 
 export interface CompatibilityOptions {
@@ -249,6 +321,17 @@ export interface RunToolLoopOptions {
   onEvent?: (event: AgentEvent) => void;
 }
 
+export interface IntegrationToolLoopOptions {
+  systemPrompt: string;
+  initialUserPrompt: string;
+  tools: ToolDefinition[];
+  pack: Pack;
+  projectRoot: string;
+  verbose?: boolean;
+  timeoutMs?: number;
+  onEvent?: (event: AgentEvent) => void;
+}
+
 export interface PLGNAgent {
   readonly defaults: PLGNDefaults;
   readonly systemPrompt: string;
@@ -257,6 +340,7 @@ export interface PLGNAgent {
   analyzeCompatibility(pack: Pack, project: string, lang?: string): Promise<CompatibilityReport>;
   adaptPack(pack: Pack, project: string, instructions?: string): Promise<ChangeSet>;
   integrateFeature(pack: Pack, project: string, dryRun?: boolean): Promise<IntegrationResult>;
+  integrateWithTools(options: IntegrationToolLoopOptions): Promise<ChangeSet>;
   implementFeature(pack: Pack, targetLang: string, projectPatterns: ProjectProfile): Promise<ImplementedCode>;
   scoreConfidence(output: unknown): number;
   scanForVulns(code: string, lang: string): Promise<VulnReport>;

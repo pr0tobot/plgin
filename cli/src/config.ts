@@ -1,7 +1,7 @@
 import fsExtra from 'fs-extra';
-const { readJson, writeJson, ensureDir } = fsExtra;
+const { readJson, writeJson, ensureDir, ensureDirSync } = fsExtra;
 import { homedir } from 'node:os';
-import { join, dirname } from 'node:path';
+import { join, dirname, isAbsolute } from 'node:path';
 import { existsSync } from 'node:fs';
 import { z } from 'zod';
 import type { ConfigFile, PLGNDefaults, Provider } from './types.js';
@@ -19,10 +19,22 @@ const defaultsSchema = z.object({
   securityScanner: z.enum(['snyk', 'trivy', 'custom', 'none'])
 });
 
+const preferencesSchema = z.object({
+  autoApplyAdd: z.boolean().default(false)
+});
+
+const registrySchema = z.object({
+  url: z.string().optional(),
+  org: z.string().optional(),
+  token: z.string().optional()
+}).default({});
+
 const configSchema = z.object({
   defaults: defaultsSchema,
   providerOptions: z.record(z.string(), z.unknown()).default({}),
-  tokens: z.record(z.string(), z.string().optional()).default({})
+  tokens: z.record(z.string(), z.string().optional()).default({}),
+  preferences: preferencesSchema.default({ autoApplyAdd: false }),
+  registry: registrySchema
 });
 
 const DEFAULT_CONFIG: ConfigFile = {
@@ -34,14 +46,66 @@ const DEFAULT_CONFIG: ConfigFile = {
     securityScanner: 'snyk'
   },
   providerOptions: {},
-  tokens: {}
+  tokens: {},
+  preferences: {
+    autoApplyAdd: false
+  },
+  registry: {}
 };
 
-export const getEnv = () => ({
-  cwd: process.cwd(),
-  configPath: CONFIG_PATH,
-  cacheDir: CACHE_DIR
-});
+function resolveOverrideCacheDir(cwd: string): string | undefined {
+  const override = process.env.PLGN_CACHE_DIR;
+  if (!override) {
+    return undefined;
+  }
+  const resolved = isAbsolute(override) ? override : join(cwd, override);
+  try {
+    ensureDirSync(resolved);
+    return resolved;
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveCacheDir(cwd: string): string {
+  const override = resolveOverrideCacheDir(cwd);
+  if (override) {
+    return override;
+  }
+
+  const workspaceRoot = join(cwd, '.plgn');
+  const workspaceCacheDir = join(workspaceRoot, 'cache');
+  const workspaceOptIn = process.env.PLGN_CACHE_STRATEGY === 'workspace'
+    || process.env.PLGN_CACHE_STRATEGY === 'project'
+    || existsSync(workspaceRoot);
+
+  if (workspaceOptIn) {
+    try {
+      ensureDirSync(workspaceCacheDir);
+      return workspaceCacheDir;
+    } catch {
+      // fall through to home cache
+    }
+  }
+
+  try {
+    ensureDirSync(CACHE_DIR);
+    return CACHE_DIR;
+  } catch {
+    return workspaceCacheDir;
+  }
+}
+
+export const getEnv = () => {
+  const cwd = process.cwd();
+  const cacheDir = resolveCacheDir(cwd);
+  process.env.PLGN_ACTIVE_CACHE_DIR = cacheDir;
+  return {
+    cwd,
+    configPath: CONFIG_PATH,
+    cacheDir
+  };
+};
 
 export async function loadConfig(): Promise<ConfigFile> {
   if (!existsSync(CONFIG_PATH)) {

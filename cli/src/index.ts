@@ -1,8 +1,12 @@
 #!/usr/bin/env node
 
+import { existsSync } from 'node:fs';
+import { basename, resolve, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createInterface } from 'node:readline/promises';
+import { stdin as input, stdout as output } from 'node:process';
 import dotenv from 'dotenv';
-dotenv.config({ path: '.env.local' });
-import { basename } from 'node:path';
+import fsExtra from 'fs-extra';
 import { Command, Option } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
@@ -23,18 +27,77 @@ import type {
 import { createPackFromSource, createPackFromPrompt } from './creator.js';
 import { discoverPacks, publishPack } from './registry.js';
 import { checkCompatibility, integratePack } from './integrator.js';
+import { applyChangeSet } from './utils/diff.js';
 import { createAgent } from './agent.js';
+
+const moduleDir = fileURLToPath(new URL('.', import.meta.url));
+const cliRoot = resolve(moduleDir, '..');
+const repoRoot = resolve(cliRoot, '..');
+
+const ENV_SEARCH_ORDER = [
+  resolve(process.cwd(), '.env.local'),
+  resolve(process.cwd(), '.env'),
+  resolve(process.cwd(), '.plgn', '.env.local'),
+  resolve(process.cwd(), '.plgn', '.env'),
+  resolve(cliRoot, '.env.local'),
+  resolve(cliRoot, '.env'),
+  resolve(repoRoot, '.env.local'),
+  resolve(repoRoot, '.env')
+];
+
+const { ensureDirSync } = fsExtra;
+
+function loadEnvironment(): void {
+  try {
+    ensureDirSync(resolve(process.cwd(), '.plgn'));
+  } catch {
+    // best-effort workspace scaffolding
+  }
+  const loaded = new Set<string>();
+  for (const candidate of ENV_SEARCH_ORDER) {
+    if (loaded.has(candidate)) {
+      continue;
+    }
+    if (!existsSync(candidate)) {
+      continue;
+    }
+    dotenv.config({ path: candidate, override: false });
+    loaded.add(candidate);
+  }
+}
+
+loadEnvironment();
 
 const program = new Command();
 program
   .name('plgn')
   .description('PLGN hybrid feature pack CLI (language agnostic)')
-  .version('1.5.0');
+  .version('1.7.0');
 
 function handleError(err: unknown): void {
   const message = err instanceof Error ? err.message : String(err);
   console.error(chalk.red(`✖ ${message}`));
   process.exitCode = 1;
+}
+
+
+async function promptYesNo(message: string, defaultValue = false): Promise<boolean> {
+  const yesInputs = new Set(['y', 'yes']);
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    if (!defaultValue) {
+      console.log(chalk.yellow('Non-interactive environment detected; leaving changes unapplied.'));
+    }
+    return defaultValue;
+  }
+  const suffix = defaultValue ? ' (Y/n) ' : ' (y/N) ';
+  const rl = createInterface({ input, output });
+  try {
+    const answer = (await rl.question(`${message}${suffix}`)).trim().toLowerCase();
+    if (!answer) return defaultValue;
+    return yesInputs.has(answer);
+  } finally {
+    rl.close();
+  }
 }
 
 program
@@ -47,6 +110,11 @@ program
   .addOption(new Option('--security-scanner <scanner>').choices(['snyk', 'trivy', 'custom', 'none']))
   .option('--token <token>', 'persist API token for active provider')
   .option('--clear-token', 'remove token for active provider')
+  .option('--auto-apply-add', 'enable automatic apply after successful integration')
+  .option('--no-auto-apply-add', 'disable automatic apply after integration')
+  .option('--registry-url <url>', 'set registry URL')
+  .option('--registry-org <org>', 'set GitHub org for registry')
+  .option('--github-token <token>', 'set GitHub token for registry')
   .option('--show', 'print current configuration')
   .action(async (flags) => {
     try {
@@ -66,6 +134,25 @@ program
       if (flags.securityScanner) overrides.securityScanner = flags.securityScanner;
 
       let updated = mergeDefaults(config, overrides);
+      let preferences = updated.preferences ?? { autoApplyAdd: false };
+      if (flags.autoApplyAdd) {
+        preferences = { ...preferences, autoApplyAdd: true };
+      }
+      if (flags.noAutoApplyAdd) {
+        preferences = { ...preferences, autoApplyAdd: false };
+      }
+
+      let registry = updated.registry ?? {};
+      if (flags.registryUrl) {
+        registry = { ...registry, url: flags.registryUrl };
+      }
+      if (flags.registryOrg) {
+        registry = { ...registry, org: flags.registryOrg };
+      }
+      if (flags.githubToken) {
+        registry = { ...registry, token: flags.githubToken };
+      }
+
       const provider = overrides.provider ?? config.defaults.provider;
       if (flags.token) {
         updated = upsertToken(updated, provider as Provider, flags.token);
@@ -73,6 +160,12 @@ program
       if (flags.clearToken) {
         updated = upsertToken(updated, provider as Provider, undefined);
       }
+
+      updated = {
+        ...updated,
+        preferences,
+        registry
+      };
 
       await saveConfig(updated);
       console.log(chalk.green('✓ Configuration updated'));
@@ -278,10 +371,15 @@ program
   .option('--dry-run', 'preview without writing changes')
   .option('--agentic', 'force agentic integration path')
   .option('--lang <language>', 'target language override')
+  .option('--verbose', 'enable verbose integration logs')
   .action(async (packRef: string, flags) => {
     try {
       const config = await loadConfig();
       const env = getEnv();
+      const verbose = Boolean(flags.verbose);
+      const verboseLog = verbose
+        ? (message: string) => console.log(chalk.gray(`[plgn:add] ${message}`))
+        : undefined;
       const agent = createAgent({
         config,
         token: resolveToken(config, config.defaults.provider),
@@ -294,7 +392,8 @@ program
         instructions: flags.instructions,
         dryRun: Boolean(flags.dryRun),
         agentic: Boolean(flags.agentic),
-        targetLanguage: flags.lang ?? config.defaults.language
+        targetLanguage: flags.lang ?? config.defaults.language,
+        verbose
       });
       spinner.stop();
       console.log(chalk.green(`Integration prepared with confidence ${(result.changeSet.confidence * 100).toFixed(1)}%`));
@@ -303,11 +402,81 @@ program
         for (const item of result.changeSet.items) {
           console.log(`  [${item.action}] ${item.path} (${item.language})`);
         }
+      } else {
+        console.log(chalk.gray('No file changes were proposed.'));
+      }
+      if (result.diffs.length) {
+        console.log(chalk.cyan('\nPreview diff summary:'));
+        for (const diff of result.diffs) {
+          const delta = chalk.gray(`(+${diff.stats.additions}/-${diff.stats.deletions})`);
+          console.log(`  ${diff.action.padEnd(6)} ${diff.path} ${delta}`);
+        }
+        if (result.previewDir) {
+          console.log(chalk.gray(`\nPreview artifacts are available under ${result.previewDir}`));
+        }
+      } else if (result.previewDir) {
+        console.log(chalk.gray(`Preview artifacts are available under ${result.previewDir}`));
       }
       if (result.vulnerabilities?.findings.length) {
         console.log(chalk.yellow('Security findings:'));
         for (const finding of result.vulnerabilities.findings) {
           console.log(`  ${finding.id} (${finding.severity}) - ${finding.title}`);
+        }
+      }
+      const autoApplyAdd = config.preferences?.autoApplyAdd ?? false;
+
+      if (flags.dryRun) {
+        console.log(chalk.gray('Dry run requested: no files were modified.'));
+        if (autoApplyAdd) {
+          console.log(chalk.gray('Auto-apply preference ignored in dry-run mode.'));
+        }
+        return;
+      }
+      if (!result.changeSet.items.length) {
+        if (result.previewDir) {
+          console.log(chalk.gray(`Preview artifacts remain at ${result.previewDir}`));
+        }
+        return;
+      }
+      if (autoApplyAdd) {
+        console.log(chalk.gray('Auto-apply preference enabled; applying change set.'));
+        const summary = await applyChangeSet(result.changeSet, {
+          projectRoot: process.cwd(),
+          logger: verboseLog
+        });
+        console.log(chalk.green(`Applied ${summary.applied.length} file(s).`));
+        if (summary.skipped.length) {
+          console.log(chalk.yellow('Skipped files:'));
+          for (const skip of summary.skipped) {
+            console.log(`  ${skip.path} - ${skip.reason}`);
+          }
+        }
+        if (result.previewDir) {
+          console.log(chalk.gray(`Preview artifacts remain at ${result.previewDir}`));
+        }
+        return;
+      }
+
+      const applyNow = await promptYesNo('Apply these changes now?');
+      if (applyNow) {
+        const summary = await applyChangeSet(result.changeSet, {
+          projectRoot: process.cwd(),
+          logger: verboseLog
+        });
+        console.log(chalk.green(`Applied ${summary.applied.length} file(s).`));
+        if (summary.skipped.length) {
+          console.log(chalk.yellow('Skipped files:'));
+          for (const skip of summary.skipped) {
+            console.log(`  ${skip.path} - ${skip.reason}`);
+          }
+        }
+        if (result.previewDir) {
+          console.log(chalk.gray(`Preview artifacts remain at ${result.previewDir}`));
+        }
+      } else {
+        console.log(chalk.gray('Changes left unapplied. Review the preview above and re-run when ready.'));
+        if (result.previewDir) {
+          console.log(chalk.gray(`Preview artifacts remain at ${result.previewDir}`));
         }
       }
     } catch (error) {
@@ -329,6 +498,85 @@ program
         defaults: config.defaults
       });
       spinner.succeed('Pack published');
+    } catch (error) {
+      handleError(error);
+    }
+  });
+
+program
+  .command('status')
+  .description('Show PLGN workspace status')
+  .action(async () => {
+    try {
+      const env = getEnv();
+      const config = await loadConfig();
+
+      console.log(chalk.cyan('PLGN Status'));
+      console.log(`Cache dir: ${env.cacheDir}`);
+      console.log(`Config: ${env.configPath}`);
+      console.log(`Provider: ${config.defaults.provider}`);
+      console.log(`Model: ${config.defaults.model}`);
+
+      if (config.registry.org) {
+        console.log(`Registry org: ${config.registry.org}`);
+      }
+
+      const { readdir, stat } = fsExtra;
+      const previewsDir = join(env.cacheDir, '..', 'previews');
+      if (await fsExtra.pathExists(previewsDir)) {
+        const previews = await readdir(previewsDir);
+        console.log(`\nPreviews: ${previews.length} directories`);
+      }
+
+      if (await fsExtra.pathExists(env.cacheDir)) {
+        const cacheFiles = await readdir(env.cacheDir);
+        let totalSize = 0;
+        for (const file of cacheFiles) {
+          const stats = await stat(join(env.cacheDir, file));
+          totalSize += stats.size;
+        }
+        console.log(`Cache: ${cacheFiles.length} files (${(totalSize / 1024).toFixed(2)} KB)`);
+      }
+    } catch (error) {
+      handleError(error);
+    }
+  });
+
+program
+  .command('clean')
+  .description('Clean PLGN cache and preview directories')
+  .option('--cache', 'clean cache only')
+  .option('--previews', 'clean previews only')
+  .action(async (flags) => {
+    try {
+      const env = getEnv();
+      const { remove, pathExists } = fsExtra;
+
+      if (!flags.cache && !flags.previews) {
+        if (await pathExists(env.cacheDir)) {
+          await remove(env.cacheDir);
+          console.log(chalk.green(`✓ Cleared cache: ${env.cacheDir}`));
+        }
+
+        const previewsDir = join(env.cacheDir, '..', 'previews');
+        if (await pathExists(previewsDir)) {
+          await remove(previewsDir);
+          console.log(chalk.green(`✓ Cleared previews: ${previewsDir}`));
+        }
+      } else {
+        if (flags.cache && await pathExists(env.cacheDir)) {
+          await remove(env.cacheDir);
+          console.log(chalk.green(`✓ Cleared cache: ${env.cacheDir}`));
+        }
+
+        if (flags.previews) {
+          const previewsDir = join(env.cacheDir, '..', 'previews');
+          if (await pathExists(previewsDir)) {
+            await remove(previewsDir);
+            console.log(chalk.green(`✓ Cleared previews: ${previewsDir}`));
+          }
+        }
+      }
     } catch (error) {
       handleError(error);
     }

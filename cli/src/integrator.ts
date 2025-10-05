@@ -5,16 +5,18 @@ import {
   detectLanguageFromPath,
   listFilesRecursive
 } from './utils/fs.js';
+import { buildChangeSetPreview } from './utils/diff.js';
 import type {
   CompatibilityOptions,
   CompatibilityReport,
   IntegratePackParams,
   Pack,
   ChangeSet,
-  ChangeSetItem,
   IntegrationResult,
   ProjectProfile,
-  PackManifest
+  PackManifest,
+  FileDiff,
+  ToolDefinition
 } from './types.js';
 
 export async function checkCompatibility(options: CompatibilityOptions): Promise<CompatibilityReport> {
@@ -22,56 +24,336 @@ export async function checkCompatibility(options: CompatibilityOptions): Promise
   return computeCompatibility(pack, options.targetLanguage);
 }
 
+function resolveActiveCacheDir(): string {
+  if (process.env.PLGN_ACTIVE_CACHE_DIR) {
+    return process.env.PLGN_ACTIVE_CACHE_DIR;
+  }
+  return join(process.cwd(), '.plgn', 'cache');
+}
+
+const INTEGRATION_TOOLS: ToolDefinition[] = [
+  {
+    type: 'function',
+    function: {
+      name: 'list_project_files',
+      description: 'List files within the target project to understand existing structure.',
+      parameters: {
+        type: 'object',
+        properties: {
+          relative_dir: {
+            type: 'string',
+            description: 'Project-relative directory to inspect.'
+          },
+          max_results: {
+            type: 'number',
+            description: 'Optional cap on returned file paths.'
+          }
+        },
+        required: []
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'read_project_file',
+      description: 'Read an existing project file for context.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: {
+            type: 'string',
+            description: 'File path relative to the project root.'
+          }
+        },
+        required: ['path']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'list_pack_files',
+      description: 'List files bundled within the pack source directory.',
+      parameters: {
+        type: 'object',
+        properties: {
+          relative_dir: {
+            type: 'string',
+            description: 'Pack-relative directory (defaults to source/).'
+          }
+        },
+        required: []
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'read_pack_file',
+      description: 'Read a file from the pack to reuse or adapt during integration.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: {
+            type: 'string',
+            description: 'Path relative to the pack root.'
+          }
+        },
+        required: ['path']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'detect_language',
+      description: 'Infer the likely language for a file path to tag changes.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: {
+            type: 'string',
+            description: 'File path to inspect.'
+          }
+        },
+        required: ['path']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'write_change',
+      description: 'Propose a file create/update for the project change set.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: {
+            type: 'string',
+            description: 'Project-relative path to write.'
+          },
+          contents: {
+            type: 'string',
+            description: 'UTF-8 file contents to store.'
+          },
+          language: {
+            type: 'string',
+            description: 'Language hint for the change entry.'
+          },
+          action: {
+            type: 'string',
+            enum: ['create', 'update'],
+            description: 'Optional explicit action; defaults based on file existence.'
+          }
+        },
+        required: ['path', 'contents']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'delete_change',
+      description: 'Mark a project file for deletion within the change set.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: {
+            type: 'string',
+            description: 'Project-relative path to delete.'
+          },
+          language: {
+            type: 'string',
+            description: 'Language hint for tagging the deletion.'
+          }
+        },
+        required: ['path']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'log_progress',
+      description: 'Write an integration progress update to logs.',
+      parameters: {
+        type: 'object',
+        properties: {
+          message: {
+            type: 'string',
+            description: 'Human-readable status message.'
+          }
+        },
+        required: ['message']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'finalize_changes',
+      description: 'Finalize the change set and report completion.',
+      parameters: {
+        type: 'object',
+        properties: {
+          summary: {
+            type: 'string',
+            description: 'Concise summary of the integration work.'
+          },
+          confidence: {
+            type: 'number',
+            description: 'Confidence score between 0 and 1.'
+          }
+        },
+        required: []
+      }
+    }
+  }
+];
+
 export async function integratePack(params: IntegratePackParams): Promise<IntegrationResult> {
+  const verboseLog = params.verbose
+    ? (message: string) => console.log(`[plgn:add] ${message}`)
+    : undefined;
+
+  verboseLog?.(`Loading pack from ${params.packRef}`);
   const pack = await loadPack(params.packRef);
   const targetLanguage = params.targetLanguage === 'auto-detect'
     ? inferPrimaryLanguage(pack)
     : params.targetLanguage;
   const profile = await deriveProjectProfile(targetLanguage);
+  verboseLog?.(`Target language resolved to ${targetLanguage}`);
 
   const requiresAgentic = params.agentic || !hasLanguageExample(pack, targetLanguage);
+  verboseLog?.(`Integration mode: ${requiresAgentic ? 'agentic (implementFeature)' : 'direct adaptation via adaptPack'}`);
 
   if (requiresAgentic) {
-    const implemented = await params.agent.implementFeature(pack, targetLanguage, profile);
-    const allItems: ChangeSetItem[] = [
-      ...implemented.files,
-      ...(implemented.tests ?? []),
-      ...(implemented.docs ?? [])
-    ];
-    const baseConfidence = params.agent.scoreConfidence(implemented.confidence);
+    verboseLog?.('Invoking integration tool loop to synthesize change set');
+    const integrationPrompt = buildIntegrationPrompt({
+      pack,
+      profile,
+      targetLanguage,
+      projectRoot: process.cwd(),
+      extraInstructions: params.instructions
+    });
+    const changeSet = await params.agent.integrateWithTools({
+      systemPrompt: params.agent.systemPrompt,
+      initialUserPrompt: integrationPrompt,
+      tools: INTEGRATION_TOOLS,
+      pack,
+      projectRoot: process.cwd(),
+      verbose: params.verbose
+    });
     const minConfidence = typeof pack.manifest.ai_adaptation?.min_confidence === 'number'
       ? pack.manifest.ai_adaptation.min_confidence
       : 0;
-    const changeSet: ChangeSet = {
-      items: allItems,
-      summary: `Agentic implementation for ${pack.manifest.name}`,
-      confidence: Math.max(baseConfidence, minConfidence)
+    const normalizedConfidence = Math.max(
+      params.agent.scoreConfidence(changeSet.confidence),
+      minConfidence
+    );
+    const normalizedChangeSet: ChangeSet = {
+      ...changeSet,
+      confidence: normalizedConfidence
     };
+    verboseLog?.(`Change set contains ${normalizedChangeSet.items.length} item(s)`);
     const vulnerabilities = await params.agent.scanForVulns(
-      allItems.map((item) => item.contents).join('\n'),
+      normalizedChangeSet.items.map((item) => item.contents).join('\n'),
       targetLanguage
     );
+    verboseLog?.('Building preview artifacts for agentic implementation');
+    const preview = await preparePreview(normalizedChangeSet, `agentic-${pack.manifest.name}`, verboseLog);
     return {
-      changeSet,
+      changeSet: normalizedChangeSet,
       testsRun: !params.dryRun,
-      vulnerabilities
+      vulnerabilities,
+      diffs: preview.diffs,
+      previewDir: preview.previewDir
     };
   }
 
+  verboseLog?.('Invoking agent.adaptPack to tailor existing implementation');
   const adapted = await params.agent.adaptPack(
     pack,
     process.cwd(),
     params.instructions
   );
+  verboseLog?.(`Change set contains ${adapted.items.length} item(s)`);
   const vulnerabilities = await params.agent.scanForVulns(
     adapted.items.map((item) => item.contents).join('\n'),
     targetLanguage
   );
+  verboseLog?.('Building preview artifacts for adapted implementation');
+  const preview = await preparePreview(adapted, `adapted-${pack.manifest.name}`, verboseLog);
   return {
     changeSet: adapted,
     testsRun: !params.dryRun,
-    vulnerabilities
+    vulnerabilities,
+    diffs: preview.diffs,
+    previewDir: preview.previewDir
   };
+}
+
+function buildIntegrationPrompt(options: {
+  pack: Pack;
+  profile: ProjectProfile;
+  targetLanguage: string;
+  projectRoot: string;
+  extraInstructions?: string;
+}): string {
+  const { pack, profile, targetLanguage, projectRoot, extraInstructions } = options;
+  const manifest = pack.manifest;
+  const projectSummary = [
+    `Target language: ${targetLanguage}`,
+    `Naming convention: ${profile.naming}`,
+    `Frameworks: ${profile.frameworks.join(', ') || 'agnostic'}`,
+    `Structure: ${profile.structure}`
+  ].join('\n');
+  const manifestSummary = JSON.stringify({
+    name: manifest.name,
+    description: manifest.description,
+    provides: manifest.provides,
+    requirements: manifest.requirements,
+    examples: manifest.examples?.entries ?? manifest.examples ?? {}
+  }, null, 2);
+
+  const instructions = [
+    `Integrate the PLGN pack "${manifest.name}" into the project at ${projectRoot}.`,
+    'Use the provided tools to inspect both the project and the pack source files.',
+    'When proposing updates, call write_change with the full desired file contents.',
+    'For deletions, call delete_change so the CLI can apply them deterministically.',
+    'Prefer adapting pack source files under source/ to match project conventions.',
+    'Ensure tests and supporting assets are created or updated as needed.',
+    'Always end by calling finalize_changes with a concise summary and confidence between 0 and 1.',
+    `Project profile:\n${projectSummary}`,
+    `Pack manifest summary:\n${manifestSummary}`
+  ];
+
+  if (extraInstructions?.trim()) {
+    instructions.push(`Additional user instructions: ${extraInstructions.trim()}`);
+  }
+
+  return instructions.join('\n\n');
+}
+
+async function preparePreview(
+  changeSet: ChangeSet,
+  label: string,
+  logger?: (message: string) => void
+): Promise<{ diffs: FileDiff[]; previewDir?: string }> {
+  if (!changeSet.items.length) {
+    logger?.('No preview generated because the change set is empty');
+    return { diffs: [], previewDir: undefined };
+  }
+
+  const { diffs, previewDir } = await buildChangeSetPreview(changeSet, {
+    projectRoot: process.cwd(),
+    cacheDir: resolveActiveCacheDir(),
+    previewLabel: label,
+    logger
+  });
+
+  return { diffs, previewDir };
 }
 
 async function loadPack(ref: string): Promise<Pack> {
@@ -82,8 +364,9 @@ async function loadPack(ref: string): Promise<Pack> {
   ];
   let packDir: string | undefined;
   for (const candidate of candidatePaths) {
-    if (await pathExists(candidate)) {
-      packDir = candidate;
+    const resolvedCandidate = resolve(candidate);
+    if (await pathExists(resolvedCandidate)) {
+      packDir = resolvedCandidate;
       break;
     }
   }

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { join, resolve, isAbsolute, dirname, basename, relative } from 'node:path';
+import { join, resolve, isAbsolute, dirname, basename, relative, sep } from 'node:path';
 import fsExtra from 'fs-extra';
 const { readJson, writeJson, ensureDir, pathExists, readFile, appendFile, writeFile, copy } = fsExtra;
 import OpenAI from 'openai';
@@ -8,6 +8,7 @@ import {
   listFilesRecursive,
   detectLanguageFromPath
 } from './utils/fs.js';
+import { buildChangeSetPreview } from './utils/diff.js';
 import type {
   PLGNAgent,
   Pack,
@@ -26,7 +27,8 @@ import type {
   ToolResult,
   AgentEvent,
   ToolDefinition,
-  RunToolLoopOptions
+  RunToolLoopOptions,
+  IntegrationToolLoopOptions
 } from './types.js';
 
 export const PLGN_SYSTEM_PROMPT = `You are PLGN, an expert feature extraction and integration agent for any programming language.
@@ -411,6 +413,371 @@ class HybridAgent implements PLGNAgent {
     return finalPack;
   }
 
+  async integrateWithTools(options: IntegrationToolLoopOptions): Promise<ChangeSet> {
+    const {
+      systemPrompt,
+      initialUserPrompt,
+      tools,
+      pack,
+      projectRoot,
+      verbose = false,
+      timeoutMs,
+      onEvent
+    } = options;
+
+    const resolvedProjectRoot = resolve(projectRoot);
+    const packRoot = resolve(pack.rootDir);
+    if (!process.env.PLGN_PROJECT_DIR) {
+      process.env.PLGN_PROJECT_DIR = resolvedProjectRoot;
+    }
+
+    const messages: any[] = [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: initialUserPrompt }
+    ];
+
+    let conversation = messages;
+    let lastContent: string | undefined;
+    let finalized = false;
+    let summary = `Integration for ${pack.manifest.name}`;
+    let reportedConfidence: number | undefined;
+    let idleResponses = 0;
+
+    const changeMap = new Map<string, ChangeSetItem>();
+
+    const isWithinRoot = (root: string, target: string): boolean => {
+      const normalizedRoot = root.endsWith(sep) ? root : `${root}${sep}`;
+      return target === root || target.startsWith(normalizedRoot);
+    };
+
+    const coerceSummary = (content: string | undefined): string => {
+      if (!content) return summary;
+      const normalized = content.replace(/\r/g, '\n');
+      for (const line of normalized.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        if (/^```/.test(trimmed)) continue;
+        if (/^#{1,6}\s+/.test(trimmed)) {
+          return trimmed.replace(/^#{1,6}\s+/, '').slice(0, 240);
+        }
+        if (/^[-*]\s+/.test(trimmed)) {
+          return trimmed.replace(/^[-*]\s+/, '').slice(0, 240);
+        }
+        return trimmed.slice(0, 240);
+      }
+      return summary;
+    };
+
+    const emitEvent = (type: AgentEvent['type'], data: any) => {
+      const event: AgentEvent = {
+        type,
+        data,
+        timestamp: Date.now()
+      };
+      onEvent?.(event);
+      if (verbose) {
+        console.log(chalk.gray(`[Agent ${type}]`), data);
+      }
+      this.logIntegrationProgress(`Agent ${type}: ${JSON.stringify(data)}`);
+    };
+
+    emitEvent('start', { tools: tools.map((t) => t.function.name) });
+
+    const toolMap = new Map<string, (args: any) => Promise<string>>();
+
+    toolMap.set('list_project_files', async (args) => {
+      const dir = args?.relative_dir ?? '.';
+      const max = typeof args?.max_results === 'number' && args.max_results > 0
+        ? Math.min(args.max_results, 500)
+        : undefined;
+      const safeDir = resolve(resolvedProjectRoot, dir);
+      if (!isWithinRoot(resolvedProjectRoot, safeDir)) {
+        return JSON.stringify({ error: 'Path traversal not allowed' });
+      }
+      if (!(await pathExists(safeDir))) {
+        return JSON.stringify({ error: 'Directory not found' });
+      }
+      const files = await listFilesRecursive(safeDir);
+      const relativeFiles = files
+        .map((file) => relative(resolvedProjectRoot, file))
+        .filter((value) => value && !value.startsWith('..'));
+      const limited = typeof max === 'number' ? relativeFiles.slice(0, max) : relativeFiles;
+      return JSON.stringify({ files: limited });
+    });
+
+    toolMap.set('read_project_file', async (args) => {
+      const relPath = args?.path;
+      if (typeof relPath !== 'string' || !relPath.trim()) {
+        return JSON.stringify({ error: 'Path is required' });
+      }
+      const safePath = resolve(resolvedProjectRoot, relPath);
+      if (!isWithinRoot(resolvedProjectRoot, safePath)) {
+        return JSON.stringify({ error: 'Path traversal not allowed' });
+      }
+      if (!(await pathExists(safePath))) {
+        return JSON.stringify({ error: 'File not found' });
+      }
+      const content = await readFile(safePath, 'utf8');
+      return JSON.stringify({ path: relPath, content });
+    });
+
+    toolMap.set('list_pack_files', async (args) => {
+      const dir = args?.relative_dir ?? 'source';
+      const safeDir = resolve(packRoot, dir);
+      if (!isWithinRoot(packRoot, safeDir)) {
+        return JSON.stringify({ error: 'Path traversal not allowed' });
+      }
+      if (!(await pathExists(safeDir))) {
+        return JSON.stringify({ error: 'Directory not found' });
+      }
+      const files = await listFilesRecursive(safeDir);
+      const relativeFiles = files
+        .map((file) => relative(packRoot, file))
+        .filter((value) => value && !value.startsWith('..'));
+      return JSON.stringify({ files: relativeFiles });
+    });
+
+    toolMap.set('read_pack_file', async (args) => {
+      const relPath = args?.path;
+      if (typeof relPath !== 'string' || !relPath.trim()) {
+        return JSON.stringify({ error: 'Path is required' });
+      }
+      const safePath = resolve(packRoot, relPath);
+      if (!isWithinRoot(packRoot, safePath)) {
+        return JSON.stringify({ error: 'Path traversal not allowed' });
+      }
+      if (!(await pathExists(safePath))) {
+        return JSON.stringify({ error: 'File not found' });
+      }
+      const content = await readFile(safePath, 'utf8');
+      return JSON.stringify({ path: relPath, content });
+    });
+
+    toolMap.set('detect_language', async (args) => {
+      const path = args?.path;
+      if (typeof path !== 'string' || !path.trim()) {
+        return JSON.stringify({ error: 'Path is required' });
+      }
+      const language = detectLanguageFromPath(path);
+      return JSON.stringify({ path, language });
+    });
+
+    toolMap.set('write_change', async (args) => {
+      const relPath = args?.path;
+      const contents = typeof args?.contents === 'string' ? args.contents : String(args?.contents ?? '');
+      if (typeof relPath !== 'string' || !relPath.trim()) {
+        return JSON.stringify({ error: 'Path is required' });
+      }
+      const safePath = resolve(resolvedProjectRoot, relPath);
+      if (!isWithinRoot(resolvedProjectRoot, safePath)) {
+        return JSON.stringify({ error: 'Path traversal not allowed' });
+      }
+      const exists = await pathExists(safePath);
+      let action: ChangeSetItem['action'];
+      if (args?.action === 'create' || args?.action === 'update') {
+        action = args.action;
+      } else {
+        action = exists ? 'update' : 'create';
+      }
+      const language = typeof args?.language === 'string' && args.language.trim()
+        ? args.language.trim()
+        : detectLanguageFromPath(relPath) || 'unknown';
+      const item: ChangeSetItem = {
+        path: relPath,
+        contents,
+        language,
+        action
+      };
+      changeMap.set(relPath, item);
+      this.logIntegrationProgress(`Staged ${action} for ${relPath}`);
+      return JSON.stringify({ success: true, path: relPath, action, language });
+    });
+
+    toolMap.set('delete_change', async (args) => {
+      const relPath = args?.path;
+      if (typeof relPath !== 'string' || !relPath.trim()) {
+        return JSON.stringify({ error: 'Path is required' });
+      }
+      const safePath = resolve(resolvedProjectRoot, relPath);
+      if (!isWithinRoot(resolvedProjectRoot, safePath)) {
+        return JSON.stringify({ error: 'Path traversal not allowed' });
+      }
+      const language = typeof args?.language === 'string' && args.language.trim()
+        ? args.language.trim()
+        : detectLanguageFromPath(relPath) || 'unknown';
+      const item: ChangeSetItem = {
+        path: relPath,
+        contents: '',
+        language,
+        action: 'delete'
+      };
+      changeMap.set(relPath, item);
+      this.logIntegrationProgress(`Staged delete for ${relPath}`);
+      return JSON.stringify({ success: true, path: relPath, action: 'delete', language });
+    });
+
+    toolMap.set('log_progress', async (args) => {
+      const message = typeof args?.message === 'string' ? args.message : JSON.stringify(args);
+      await this.logIntegrationProgress(message);
+      return JSON.stringify({ success: true });
+    });
+
+    toolMap.set('finalize_changes', async (args) => {
+      if (typeof args?.summary === 'string' && args.summary.trim()) {
+        summary = args.summary.trim();
+      }
+      if (typeof args?.confidence === 'number') {
+        reportedConfidence = Math.max(0, Math.min(1, args.confidence));
+      }
+      finalized = true;
+      this.logIntegrationProgress('Received finalize_changes signal');
+      return JSON.stringify({ success: true, summary, confidence: reportedConfidence ?? null });
+    });
+
+    const callTimeout = Math.max(timeoutMs ?? 120000, 30000);
+    const withTimeout = async <T,>(p: Promise<T>, ms: number): Promise<T> => {
+      return await Promise.race([
+        p,
+        new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`Tool timeout after ${ms}ms`)), ms))
+      ]);
+    };
+
+    while (true) {
+      if (finalized) {
+        break;
+      }
+      emitEvent('heartbeat', { messages: conversation.length, staged: changeMap.size });
+
+      const response = await withTimeout(
+        this.callLLM(systemPrompt, initialUserPrompt, undefined, tools, conversation),
+        callTimeout
+      );
+
+      const message = response.choices[0].message;
+      conversation.push(message);
+
+      if (message.tool_calls && message.tool_calls.length > 0) {
+        idleResponses = 0;
+        for (const toolCall of message.tool_calls) {
+          emitEvent('tool_call', toolCall);
+
+          let parsedArgs: any;
+          try {
+            parsedArgs = JSON.parse(toolCall.function.arguments ?? '{}');
+          } catch (error) {
+            parsedArgs = { error: 'Invalid JSON arguments', raw: toolCall.function.arguments };
+          }
+
+          const toolFn = toolMap.get(toolCall.function.name);
+          if (!toolFn) {
+            const result = { error: `Unknown tool: ${toolCall.function.name}` };
+            conversation.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: JSON.stringify(result)
+            });
+            emitEvent('tool_result', result);
+            continue;
+          }
+          const result = await withTimeout(toolFn(parsedArgs), 30000);
+          conversation.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: result
+          });
+          emitEvent('tool_result', { tool: toolCall.function.name, result });
+        }
+        if (finalized) {
+          break;
+        }
+      } else if (message.content) {
+        lastContent = typeof message.content === 'string' ? message.content : JSON.stringify(message.content);
+        emitEvent('complete', { content: lastContent });
+        idleResponses += 1;
+        if (!finalized && changeMap.size && idleResponses >= 2) {
+          summary = coerceSummary(lastContent);
+          reportedConfidence = reportedConfidence ?? Math.min(0.95, 0.7 + Math.min(changeMap.size, 25) * 0.01);
+          finalized = true;
+          this.logIntegrationProgress('Auto-finalizing change set after idle assistant response');
+        }
+        if (finalized) {
+          break;
+        }
+      }
+
+      if (finalized && (!message.tool_calls || message.tool_calls.length === 0)) {
+        break;
+      }
+
+      if (!message.tool_calls && !message.content && finalized) {
+        break;
+      }
+
+      if (!message.tool_calls && !message.content) {
+        // Prevent infinite loops if the model goes silent without finalizing.
+        if (finalized) {
+          break;
+        }
+      }
+    }
+
+    if (!finalized) {
+      if (lastContent) {
+        try {
+          const parsed = JSON.parse(lastContent);
+          if (Array.isArray(parsed?.files)) {
+            changeMap.clear();
+            for (const entry of parsed.files) {
+              if (entry?.path && (entry?.contents || entry?.action === 'delete')) {
+                const action = entry.action === 'delete'
+                  ? 'delete'
+                  : entry.action === 'update'
+                    ? 'update'
+                    : 'create';
+                const language = entry.language ?? detectLanguageFromPath(entry.path) ?? 'unknown';
+                changeMap.set(entry.path, {
+                  path: entry.path,
+                  contents: action === 'delete' ? '' : entry.contents,
+                  language,
+                  action
+                });
+              }
+            }
+            if (parsed.summary) {
+              summary = parsed.summary;
+            }
+            if (typeof parsed.confidence === 'number') {
+              reportedConfidence = Math.max(0, Math.min(1, parsed.confidence));
+            }
+            finalized = true;
+          }
+        } catch {
+          // ignore parse errors; we'll handle below
+        }
+      }
+
+      if (!finalized && changeMap.size) {
+        summary = coerceSummary(lastContent);
+        reportedConfidence = reportedConfidence ?? Math.min(0.95, 0.7 + Math.min(changeMap.size, 25) * 0.01);
+        finalized = true;
+        this.logIntegrationProgress('Auto-finalized change set using staged items');
+      }
+
+      if (!finalized) {
+        throw new Error('Integration tool loop ended without finalize_changes');
+      }
+    }
+
+    const items = Array.from(changeMap.values());
+    const confidence = this.scoreConfidence(reportedConfidence ?? 0.8);
+
+    return {
+      items,
+      summary,
+      confidence
+    };
+  }
+
   private getBaseURL(): string {
     switch (this.defaults.provider) {
       case 'openrouter':
@@ -431,6 +798,19 @@ class HybridAgent implements PLGNAgent {
       await ensureDir(join(packDir, 'logs'));
       const line = `[${new Date().toISOString()}] ${message}`;
       await appendFile(join(packDir, 'logs', 'create.log'), line + '\n', 'utf8');
+    } catch {
+      // best-effort logging
+    }
+  }
+
+  private async logIntegrationProgress(message: string): Promise<void> {
+    const projectDir = process.env.PLGN_PROJECT_DIR;
+    if (!projectDir) return;
+    try {
+      const logsDir = join(projectDir, '.plgn', 'logs');
+      await ensureDir(logsDir);
+      const line = `[${new Date().toISOString()}] ${message}`;
+      await appendFile(join(logsDir, 'integration.log'), line + '\n', 'utf8');
     } catch {
       // best-effort logging
     }
@@ -627,8 +1007,13 @@ Generate adapted code that follows the target project's patterns. Respond with J
   "confidence": 0.85
 }`;
 
-    const adaptResult = await this.callLLM(this.systemPrompt, adaptPrompt, 0.3);
-    const adaptContent = this.extractMessageContent(adaptResult);
+    let adaptContent: string | undefined;
+    try {
+      const adaptResult = await this.callLLM(this.systemPrompt, adaptPrompt, 0.3);
+      adaptContent = this.extractMessageContent(adaptResult);
+    } catch {
+      adaptContent = undefined;
+    }
 
     try {
       if (!adaptContent) {
@@ -663,11 +1048,24 @@ Generate adapted code that follows the target project's patterns. Respond with J
     const changeSet = await this.adaptPack(pack, project, dryRun ? 'dry-run preview' : undefined);
     const codeSample = changeSet.items.map((item) => item.contents).join('\n');
     const vulnerabilities = await this.scanForVulns(codeSample, pack.manifest.requirements.languages[0] ?? 'any');
+    const projectRoot = project
+      ? (isAbsolute(project) ? project : resolve(project))
+      : process.cwd();
+
+    const preview = changeSet.items.length
+      ? await buildChangeSetPreview(changeSet, {
+          projectRoot,
+          cacheDir: this.cacheDir,
+          previewLabel: dryRun ? `dry-run-${pack.manifest.name}` : `integration-${pack.manifest.name}`
+        })
+      : { diffs: [], previewDir: undefined };
 
     return {
       changeSet,
       testsRun: !dryRun,
-      vulnerabilities
+      vulnerabilities,
+      diffs: preview.diffs,
+      previewDir: preview.previewDir
     };
   }
 
@@ -720,8 +1118,13 @@ Handle edge cases, security, and performance. Respond with JSON only:
   "confidence": 0.9
 }`;
 
-    const implementResult = await this.callLLM(this.systemPrompt, implementPrompt, 0.4);
-    const implementContent = this.extractMessageContent(implementResult);
+    let implementContent: string | undefined;
+    try {
+      const implementResult = await this.callLLM(this.systemPrompt, implementPrompt, 0.4);
+      implementContent = this.extractMessageContent(implementResult);
+    } catch {
+      implementContent = undefined;
+    }
 
     try {
       if (!implementContent) {

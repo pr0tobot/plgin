@@ -19,7 +19,11 @@ const TEST_CONFIG: ConfigFile = {
   providerOptions: {},
   tokens: {
     openrouter: process.env.OPENROUTER_API_KEY || process.env.PLGN_API_KEY
-  }
+  },
+  preferences: {
+    autoApplyAdd: false
+  },
+  registry: {}
 };
 
 describe('PLGN E2E Tests', () => {
