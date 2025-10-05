@@ -463,7 +463,7 @@ async function downloadPackFromRegistry(ref: string): Promise<string> {
   }
 
   const token = resolveGitHubToken();
-  const headers: Record<string, string> = { 'User-Agent': 'plgin-cli/2.0.2' };
+  const headers: Record<string, string> = { 'User-Agent': 'plgin-cli/2.0.5' };
   if (token) {
     headers['Authorization'] = `token ${token}`;
   }

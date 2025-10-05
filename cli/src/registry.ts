@@ -70,7 +70,7 @@ async function discoverFromGitHub(
 export async function fetchRegistryFromProxy(proxyUrl: string): Promise<RegistryEntry[]> {
   const response = await fetch(`${proxyUrl}/registry/index`, {
     headers: {
-      'User-Agent': 'plgin-cli/2.0.3'
+      'User-Agent': 'plgin-cli/2.0.5'
     }
   });
 
@@ -129,7 +129,7 @@ export async function publishPack(params: PublishPackParams): Promise<PublishRes
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'User-Agent': 'plgin-cli/2.0.3'
+      'User-Agent': 'plgin-cli/2.0.5'
     },
     body: JSON.stringify({
       name: manifest.name,
@@ -158,7 +158,7 @@ export async function publishPack(params: PublishPackParams): Promise<PublishRes
   const proxyReadUrl = getRegistryEndpoint();
   const registryResponse = await fetch(`${proxyReadUrl}/registry/index`, {
     headers: {
-      'User-Agent': 'plgin-cli/2.0.3'
+      'User-Agent': 'plgin-cli/2.0.5'
     }
   });
 
@@ -336,7 +336,7 @@ async function checkSimilarity(manifest: PackManifest): Promise<{ similar: boole
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'User-Agent': 'plgin-cli/2.0.3'
+        'User-Agent': 'plgin-cli/2.0.5'
       },
       body: JSON.stringify(payload)
     });

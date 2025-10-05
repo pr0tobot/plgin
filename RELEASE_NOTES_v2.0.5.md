@@ -1,4 +1,4 @@
-# plgin v2.0.3 Release Notes
+# plgin v2.0.5 Release Notes
 
 ## 🎉 Major Features
 
@@ -76,7 +76,7 @@ $ plgin apply netflix-header --dry-run
 
 ## 🚀 Upgrade Guide
 
-### From v2.0.2 → v2.0.3
+### From v2.0.2 → v2.0.5
 ```bash
 npm install -g plgin@latest
 ```
@@ -103,4 +103,4 @@ Built with Claude Code and powered by:
 
 ---
 
-**Full Changelog**: https://github.com/PR0TO-IDE/plgin/compare/v2.0.2...v2.0.3
+**Full Changelog**: https://github.com/PR0TO-IDE/plgin/compare/v2.0.2...v2.0.5
