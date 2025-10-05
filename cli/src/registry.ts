@@ -1,17 +1,18 @@
 import fsExtra from 'fs-extra';
 const { readJson, writeJson, ensureDir, pathExists, readFile } = fsExtra;
-import { join, basename } from 'node:path';
-import { createReadStream, createWriteStream } from 'node:fs';
+import { join } from 'node:path';
 import { create as createTarball } from 'tar';
-import { pipeline } from 'node:stream/promises';
 import { GitHubClient } from './github.js';
 import { validatePackStructure, generateComplianceReport } from './lifecycle.js';
+import { createSemanticService } from './semantic.js';
+import { getEnv } from './config.js';
+import { listFilesRecursive } from './utils/fs.js';
 import type {
   RegistryPackSummary,
   RegistryEntry,
   PublishPackParams,
   PackManifest,
-  PLGNDefaults,
+  ConfigFile,
   DiscoveryOptions,
   PublishResult
 } from './types.js';
@@ -26,24 +27,27 @@ function resolveGitHubOrg(): string {
   return process.env.GITHUB_ORG || 'PR0TO-IDE';
 }
 
-export async function discoverPacks(options: DiscoveryOptions, defaults: PLGNDefaults): Promise<RegistryPackSummary[]> {
+export async function discoverPacks(options: DiscoveryOptions, config: ConfigFile): Promise<RegistryPackSummary[]> {
   const token = resolveGitHubToken();
   const org = resolveGitHubOrg();
+  const env = getEnv();
+  const semantic = createSemanticService(config, env.cacheDir);
 
   if (token && org) {
     try {
-      return await discoverFromGitHub(options, defaults, token, org);
+      return await discoverFromGitHub(options, config, semantic, token, org);
     } catch (error: any) {
       console.warn(`GitHub discovery failed (${error.message}), falling back to local registry`);
     }
   }
 
-  return await discoverFromLocal(options, defaults);
+  return await discoverFromLocal(options, config, semantic);
 }
 
 async function discoverFromGitHub(
   options: DiscoveryOptions,
-  defaults: PLGNDefaults,
+  config: ConfigFile,
+  semantic: ReturnType<typeof createSemanticService>,
   token: string,
   org: string
 ): Promise<RegistryPackSummary[]> {
@@ -56,26 +60,20 @@ async function discoverFromGitHub(
   await ensureDir(cacheDir);
   await writeJson(cacheFile, { timestamp: Date.now(), entries }, { spaces: 2 });
 
-  return entries
-    .filter((pack) => !options.language || pack.languages.includes(options.language) || pack.languages.includes('any'))
-    .filter((pack) => !options.query || pack.name.includes(options.query) || pack.description.includes(options.query))
-    .map((pack) => ({
-      name: pack.name,
-      version: pack.version,
-      languages: pack.languages,
-      description: pack.description,
-      compatibilityScore: pack.languages.includes(defaults.language) ? 0.9 : 0.7
-    }));
+  const filtered = filterByLanguage(entries, options.language);
+  const prioritized = await prioritizeEntries(filtered, options.query, options.language, semantic);
+  return prioritized.map((entry) => toSummary(entry, config));
 }
 
-async function discoverFromLocal(options: DiscoveryOptions, defaults: PLGNDefaults): Promise<RegistryPackSummary[]> {
+async function discoverFromLocal(
+  options: DiscoveryOptions,
+  config: ConfigFile,
+  semantic: ReturnType<typeof createSemanticService>
+): Promise<RegistryPackSummary[]> {
   const local = await queryLocalRegistry();
-  return local
-    .filter((pack) => !options.language || pack.languages.includes(options.language) || pack.languages.includes('any'))
-    .map((pack) => ({
-      ...pack,
-      compatibilityScore: pack.languages.includes(defaults.language) ? 0.9 : 0.7
-    }));
+  const filtered = filterByLanguage(local as unknown as RegistryEntry[], options.language);
+  const prioritized = await prioritizeEntries(filtered, options.query, options.language, semantic);
+  return prioritized.map((entry) => toSummary(entry, config));
 }
 
 export async function publishPack(params: PublishPackParams): Promise<PublishResult> {
@@ -138,19 +136,46 @@ export async function publishPack(params: PublishPackParams): Promise<PublishRes
 
   await client.updateRegistryIndex(entries, `Publish ${manifest.name}@${manifest.version}`);
 
-  await persistLocalRegistry(entries.map((e) => ({
+  const localSummaries = entries.map((e) => ({
     name: e.name,
     version: e.version,
     languages: e.languages,
     description: e.description,
     compatibilityScore: 0.8
-  })));
+  }));
+
+  await persistLocalRegistry(localSummaries);
+
+  await maybeIndexPackSemantics(params, manifest);
 
   return {
     url: releaseUrl,
     version: manifest.version,
     checksum
   };
+}
+
+async function maybeIndexPackSemantics(params: PublishPackParams, manifest: PackManifest): Promise<void> {
+  const semantic = createSemanticService(params.config, params.cacheDir);
+  if (!semantic.isEnabled()) {
+    return;
+  }
+
+  let sourcePaths: string[] = [];
+  const sourceRoot = join(params.packDir, 'source');
+  if (await pathExists(sourceRoot)) {
+    try {
+      sourcePaths = await listFilesRecursive(sourceRoot);
+    } catch (error) {
+      console.warn('[plgn:semantic] Failed to enumerate pack source files:', error instanceof Error ? error.message : error);
+    }
+  }
+
+  await semantic.indexPack({
+    manifest,
+    packDir: params.packDir,
+    sourcePaths
+  });
 }
 
 async function createPackTarball(packDir: string, name: string, version: string): Promise<Buffer> {
@@ -181,4 +206,90 @@ async function queryLocalRegistry(): Promise<RegistryPackSummary[]> {
 async function persistLocalRegistry(entries: RegistryPackSummary[]): Promise<void> {
   await ensureDir(join(process.cwd(), '.plgn'));
   await writeJson(LOCAL_REGISTRY_PATH, entries, { spaces: 2 });
+}
+
+function filterByLanguage<T extends { languages: string[] }>(entries: T[], language?: string): T[] {
+  if (!language) {
+    return entries;
+  }
+  return entries.filter((entry) => entry.languages.includes(language) || entry.languages.includes('any'));
+}
+
+function applyLexicalFilter(entries: RegistryEntry[], query?: string): RegistryEntry[] {
+  if (!query) {
+    return entries;
+  }
+  const needle = query.toLowerCase();
+  return entries.filter((entry) =>
+    entry.name.toLowerCase().includes(needle)
+    || entry.description.toLowerCase().includes(needle)
+  );
+}
+
+async function prioritizeEntries(
+  entries: RegistryEntry[],
+  query: string | undefined,
+  language: string | undefined,
+  semantic: ReturnType<typeof createSemanticService>
+): Promise<RegistryEntry[]> {
+  if (!query) {
+    return entries;
+  }
+
+  const lexical = applyLexicalFilter(entries, query);
+
+  if (!semantic.isEnabled()) {
+    return lexical.length ? lexical : entries;
+  }
+
+  const hits = await semantic.searchPacks(query, language);
+  if (!hits.length) {
+    return lexical.length ? lexical : entries;
+  }
+
+  const entryMap = new Map<string, RegistryEntry>();
+  for (const entry of entries) {
+    entryMap.set(packKey(entry.name, entry.version), entry);
+  }
+
+  const ranked: RegistryEntry[] = [];
+  const seen = new Set<string>();
+
+  const appendEntry = (entry: RegistryEntry | undefined) => {
+    if (!entry) return;
+    const key = packKey(entry.name, entry.version);
+    if (seen.has(key)) return;
+    seen.add(key);
+    ranked.push(entry);
+  };
+
+  for (const hit of hits) {
+    const entry = entryMap.get(packKey(hit.packName, hit.version));
+    appendEntry(entry);
+  }
+
+  for (const entry of lexical) {
+    appendEntry(entry);
+  }
+
+  for (const entry of entries) {
+    appendEntry(entry);
+  }
+
+  return ranked;
+}
+
+function toSummary(entry: RegistryEntry, config: ConfigFile): RegistryPackSummary {
+  const preferredLanguage = config.defaults.language;
+  return {
+    name: entry.name,
+    version: entry.version,
+    languages: entry.languages,
+    description: entry.description,
+    compatibilityScore: entry.languages.includes(preferredLanguage) ? 0.9 : 0.7
+  };
+}
+
+function packKey(name: string, version: string): string {
+  return `${name.toLowerCase()}@${version}`;
 }

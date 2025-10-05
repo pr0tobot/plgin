@@ -123,12 +123,20 @@ export interface ConfigPreferences {
   autoApplyAdd: boolean;
 }
 
+export interface SemanticConfig {
+  provider: 'nia-contexts' | 'disabled';
+  agentSource?: string;
+  tags?: string[];
+  searchLimit?: number;
+}
+
 export interface ConfigFile {
   defaults: PLGNDefaults;
   providerOptions: Record<string, unknown>;
   tokens: Record<string, string | undefined>;
   preferences: ConfigPreferences;
   registry: RegistryConfig;
+  semantic: SemanticConfig;
 }
 
 export interface FeatureExtractionRequest {
@@ -241,7 +249,8 @@ export interface CreatePackResult {
 export interface PublishPackParams {
   packDir: string;
   registry?: string;
-  defaults: PLGNDefaults;
+  config: ConfigFile;
+  cacheDir: string;
 }
 
 export interface IntegratePackParams {

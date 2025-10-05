@@ -45,6 +45,20 @@ Default config:
 - Model: `z-ai/glm-4.6`
 - Language: Auto-detect
 - Security: Vulnerability scanning enabled
+- Semantic discovery: Nia MCP contexts (disable with `plgn config --semantic-provider disabled`)
+
+### Semantic Discovery (Nia MCP)
+
+PLGN can enrich discovery and integration with semantic search powered by Nia MCP contexts.
+
+Configure the credentials (already supported via `.env.local`):
+
+```bash
+export NIA_API_KEY="nk-..."
+export NIA_API_URL="https://apigcp.trynia.ai/"
+```
+
+When enabled, `plgn publish` automatically indexes packs into Nia contexts, and `plgn discover` ranks results using semantic similarity plus language filters.
 
 ## Features
 

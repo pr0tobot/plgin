@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { join, dirname, isAbsolute } from 'node:path';
 import { existsSync } from 'node:fs';
 import { z } from 'zod';
-import type { ConfigFile, PLGNDefaults, Provider } from './types.js';
+import type { ConfigFile, PLGNDefaults, Provider, SemanticConfig } from './types.js';
 
 const CONFIG_FILENAME = 'config.json';
 const CONFIG_DIR = join(homedir(), '.plgn');
@@ -23,6 +23,18 @@ const preferencesSchema = z.object({
   autoApplyAdd: z.boolean().default(false)
 });
 
+const semanticSchema = z.object({
+  provider: z.enum(['nia-contexts', 'disabled']).default('nia-contexts'),
+  agentSource: z.string().min(1).default('plgn-cli'),
+  tags: z.array(z.string()).default(['plgn-pack']),
+  searchLimit: z.number().int().min(1).max(100).default(20)
+}).default({
+  provider: 'nia-contexts',
+  agentSource: 'plgn-cli',
+  tags: ['plgn-pack'],
+  searchLimit: 20
+});
+
 const registrySchema = z.object({
   url: z.string().optional(),
   org: z.string().optional(),
@@ -34,7 +46,8 @@ const configSchema = z.object({
   providerOptions: z.record(z.string(), z.unknown()).default({}),
   tokens: z.record(z.string(), z.string().optional()).default({}),
   preferences: preferencesSchema.default({ autoApplyAdd: false }),
-  registry: registrySchema
+  registry: registrySchema,
+  semantic: semanticSchema
 });
 
 const DEFAULT_CONFIG: ConfigFile = {
@@ -50,7 +63,13 @@ const DEFAULT_CONFIG: ConfigFile = {
   preferences: {
     autoApplyAdd: false
   },
-  registry: {}
+  registry: {},
+  semantic: {
+    provider: 'nia-contexts',
+    agentSource: 'plgn-cli',
+    tags: ['plgn-pack'],
+    searchLimit: 20
+  }
 };
 
 function resolveOverrideCacheDir(cwd: string): string | undefined {

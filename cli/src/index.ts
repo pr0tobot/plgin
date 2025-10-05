@@ -72,7 +72,7 @@ const program = new Command();
 program
   .name('plgn')
   .description('PLGN hybrid feature pack CLI (language agnostic)')
-  .version('1.7.0');
+  .version('1.8.0');
 
 function handleError(err: unknown): void {
   const message = err instanceof Error ? err.message : String(err);
@@ -316,7 +316,7 @@ program
         language: flags.lang
       };
       const spinner = ora('Querying registry...').start();
-      const results = await discoverPacks(options, config.defaults);
+      const results = await discoverPacks(options, config);
       spinner.stop();
       if (!results.length) {
         console.log(chalk.yellow('No packs matched.'));
@@ -491,11 +491,13 @@ program
   .action(async (path: string, flags) => {
     try {
       const config = await loadConfig();
+      const env = getEnv();
       const spinner = ora('Publishing pack...').start();
       await publishPack({
         packDir: path,
         registry: flags.registry,
-        defaults: config.defaults
+        config,
+        cacheDir: env.cacheDir
       });
       spinner.succeed('Pack published');
     } catch (error) {

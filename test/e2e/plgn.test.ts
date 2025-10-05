@@ -23,7 +23,13 @@ const TEST_CONFIG: ConfigFile = {
   preferences: {
     autoApplyAdd: false
   },
-  registry: {}
+  registry: {},
+  semantic: {
+    provider: 'disabled',
+    agentSource: 'vitest-suite',
+    tags: ['plgn-pack'],
+    searchLimit: 10
+  }
 };
 
 describe('PLGN E2E Tests', () => {
@@ -34,6 +40,7 @@ describe('PLGN E2E Tests', () => {
     tempDir = await mkdtemp(join(tmpdir(), 'plgn-test-'));
     cacheDir = join(tempDir, 'cache');
     await mkdir(cacheDir, { recursive: true });
+    process.env.PLGN_CACHE_DIR = cacheDir;
   });
 
   afterAll(async () => {
@@ -264,10 +271,11 @@ eval(userInput);
 
       await publishPack({
         packDir,
-        defaults: TEST_CONFIG.defaults
+        config: TEST_CONFIG,
+        cacheDir
       });
 
-      const packs = await discoverPacks({}, TEST_CONFIG.defaults);
+      const packs = await discoverPacks({}, TEST_CONFIG);
 
       expect(packs.length).toBeGreaterThan(0);
       expect(packs.some(p => p.name === 'test-pack')).toBe(true);
@@ -302,12 +310,13 @@ eval(userInput);
 
       await publishPack({
         packDir,
-        defaults: TEST_CONFIG.defaults
+        config: TEST_CONFIG,
+        cacheDir
       });
 
       const pythonPacks = await discoverPacks(
         { language: 'python' },
-        TEST_CONFIG.defaults
+        TEST_CONFIG
       );
 
       expect(pythonPacks.length).toBeGreaterThan(0);
