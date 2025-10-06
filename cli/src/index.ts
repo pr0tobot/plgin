@@ -22,7 +22,8 @@ import type {
   FeatureExtractionRequest,
   CreatePackResult,
   DiscoveryOptions,
-  Provider
+  Provider,
+  ChangeSet
 } from './types.js';
 import { createPackFromSource, createPackFromPrompt } from './creator.js';
 import { discoverPacks, publishPack } from './registry.js';
@@ -73,12 +74,50 @@ const program = new Command();
 program
   .name('plgin')
   .description('Semantic feature extraction and integration across any programming language')
-  .version('2.0.7');
+  .version('2.0.8');
 
 function handleError(err: unknown): void {
   const message = err instanceof Error ? err.message : String(err);
   console.error(chalk.red(`✖ ${message}`));
   process.exitCode = 1;
+}
+
+async function installMissingDependencies(
+  changeSet: ChangeSet,
+  projectRoot: string,
+  logger?: (msg: string) => void
+): Promise<void> {
+  const packageJsonPath = join(projectRoot, 'package.json');
+
+  if (!(await fsExtra.pathExists(packageJsonPath))) {
+    logger?.('No package.json found, skipping dependency installation');
+    return;
+  }
+
+  // Simply run npm install to install any dependencies that were added to package.json
+  console.log(chalk.cyan('Installing dependencies...'));
+
+  // Detect package manager
+  const { execSync } = await import('child_process');
+  let installCmd = 'npm install';
+
+  if (await fsExtra.pathExists(join(projectRoot, 'pnpm-lock.yaml'))) {
+    installCmd = 'pnpm install';
+  } else if (await fsExtra.pathExists(join(projectRoot, 'yarn.lock'))) {
+    installCmd = 'yarn install';
+  } else if (await fsExtra.pathExists(join(projectRoot, 'bun.lockb'))) {
+    installCmd = 'bun install';
+  }
+
+  try {
+    execSync(installCmd, {
+      cwd: projectRoot,
+      stdio: 'inherit'
+    });
+    console.log(chalk.green(`✓ Dependencies installed`));
+  } catch (error) {
+    console.warn(chalk.yellow(`Failed to install dependencies. Run '${installCmd}' manually.`));
+  }
 }
 
 
@@ -480,6 +519,10 @@ program
             console.log(`  ${skip.path} - ${skip.reason}`);
           }
         }
+
+        // Install missing dependencies
+        await installMissingDependencies(result.changeSet, process.cwd(), verboseLog);
+
         if (result.previewDir) {
           console.log(chalk.gray(`Preview artifacts remain at ${result.previewDir}`));
         }
@@ -499,6 +542,10 @@ program
             console.log(`  ${skip.path} - ${skip.reason}`);
           }
         }
+
+        // Install missing dependencies
+        await installMissingDependencies(result.changeSet, process.cwd(), verboseLog);
+
         if (result.previewDir) {
           console.log(chalk.gray(`Preview artifacts remain at ${result.previewDir}`));
         }

@@ -64,7 +64,7 @@ async function discoverFromProxy(
 export async function fetchRegistryFromProxy(proxyUrl: string): Promise<RegistryEntry[]> {
   const response = await fetch(`${proxyUrl}/registry/index`, {
     headers: {
-      'User-Agent': 'plgin-cli/2.0.7'
+      'User-Agent': 'plgin-cli/2.0.8'
     }
   });
 
@@ -123,7 +123,7 @@ export async function publishPack(params: PublishPackParams): Promise<PublishRes
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'User-Agent': 'plgin-cli/2.0.7'
+      'User-Agent': 'plgin-cli/2.0.8'
     },
     body: JSON.stringify({
       name: manifest.name,
@@ -152,7 +152,7 @@ export async function publishPack(params: PublishPackParams): Promise<PublishRes
   const proxyReadUrl = getRegistryEndpoint();
   const registryResponse = await fetch(`${proxyReadUrl}/registry/index`, {
     headers: {
-      'User-Agent': 'plgin-cli/2.0.7'
+      'User-Agent': 'plgin-cli/2.0.8'
     }
   });
 
@@ -330,7 +330,7 @@ async function checkSimilarity(manifest: PackManifest): Promise<{ similar: boole
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'User-Agent': 'plgin-cli/2.0.7'
+        'User-Agent': 'plgin-cli/2.0.8'
       },
       body: JSON.stringify(payload)
     });
